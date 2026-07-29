@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
 //|                                              PbBzhConceptEA.mq5  |
-//|              Version 1.12 - Observateur avec signaux graphiques  |
+//|              Version 1.13 - Observateur avec signaux graphiques  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026, PbBzhConcept"
 #property link      "https://www.mql5.com"
-#property version   "1.12"
+#property version   "1.13"
 #property strict
 #property description "EA pédagogique : signaux et positions virtuelles"
 
@@ -82,7 +82,7 @@ int OnInit(void)
    g_logger.Info(
       StringFormat(
          "DÉMARRAGE | "
-         "Version=1.12 | "
+         "Version=1.13 | "
          "Source=%s | "
          "Compilation=%s | "
          "Mode volume=%s | "
@@ -237,6 +237,8 @@ void OnDeinit(const int reason)
    g_logger.Info(g_virtualPositions.BuildDrawdownTimingSummary());
    g_logger.Info(g_virtualPositions.BuildLongSummary());
    g_logger.Info(g_virtualPositions.BuildShortSummary());
+   g_logger.Info(g_virtualPositions.BuildLongExitMatrixSummary());
+   g_logger.Info(g_virtualPositions.BuildShortExitMatrixSummary());
    g_logger.Info(g_virtualPositions.BuildSignalExitSummary());
    g_logger.Info(g_virtualPositions.BuildStopLossSummary());
    g_logger.Info(g_virtualPositions.BuildTakeProfitSummary());   

@@ -221,6 +221,31 @@ private:
    double m_takeProfitGrossLossMoney;
    
    // --------------------------------------------------
+   // Croisement LONG / motif de sortie.
+   // --------------------------------------------------
+   int    m_longSignalExitCount;
+   double m_longSignalExitMoney;
+   
+   int    m_longStopLossExitCount;
+   double m_longStopLossExitMoney;
+   
+   int    m_longTakeProfitExitCount;
+   double m_longTakeProfitExitMoney;
+   
+   
+   // --------------------------------------------------
+   // Croisement SHORT / motif de sortie.
+   // --------------------------------------------------
+   int    m_shortSignalExitCount;
+   double m_shortSignalExitMoney;
+   
+   int    m_shortStopLossExitCount;
+   double m_shortStopLossExitMoney;
+   
+   int    m_shortTakeProfitExitCount;
+   double m_shortTakeProfitExitMoney;
+   
+   // --------------------------------------------------
    // Ouvre une position virtuelle.
    // --------------------------------------------------
    bool OpenPosition(
@@ -613,85 +638,134 @@ private:
       return true;
      }
 
-   // --------------------------------------------------
-   // Enregistre les performances selon le motif
-   // de clôture du trade.
-   // --------------------------------------------------
-   void RecordExitPerformance(
-      const ENUM_PB_VIRTUAL_EXIT_REASON exitReason,
-      const double                      resultPoints,
-      const double                      resultMoney)
+// --------------------------------------------------
+// Enregistre les performances selon le motif
+// de clôture et le sens de la position.
+// --------------------------------------------------
+void RecordExitPerformance(
+   const ENUM_PB_VIRTUAL_POSITION_STATE positionState,
+   const ENUM_PB_VIRTUAL_EXIT_REASON     exitReason,
+   const double                          resultPoints,
+   const double                          resultMoney)
+  {
+   // ==================================================
+   // SORTIE SUR SIGNAL
+   // ==================================================
+   if(exitReason==PB_VIRTUAL_EXIT_SIGNAL)
      {
-      if(exitReason==PB_VIRTUAL_EXIT_SIGNAL)
+      m_signalExitTotalPoints+=resultPoints;
+      m_signalExitTotalMoney +=resultMoney;
+
+      if(resultPoints>0.0)
         {
-         m_signalExitTotalPoints+=resultPoints;
-         m_signalExitTotalMoney +=resultMoney;
-   
-         if(resultPoints>0.0)
-           {
-            m_signalExitWinningCount++;
-            m_signalExitGrossProfitMoney+=resultMoney;
-           }
-         else if(resultPoints<0.0)
-           {
-            m_signalExitLosingCount++;
-            m_signalExitGrossLossMoney+=MathAbs(resultMoney);
-           }
-         else
-           {
-            m_signalExitBreakEvenCount++;
-           }
-   
-         return;
+         m_signalExitWinningCount++;
+         m_signalExitGrossProfitMoney+=resultMoney;
         }
-   
-   
-      if(exitReason==PB_VIRTUAL_EXIT_STOP_LOSS)
+      else if(resultPoints<0.0)
         {
-         m_stopLossTotalPoints+=resultPoints;
-         m_stopLossTotalMoney +=resultMoney;
-   
-         if(resultPoints>0.0)
-           {
-            m_stopLossWinningCount++;
-            m_stopLossGrossProfitMoney+=resultMoney;
-           }
-         else if(resultPoints<0.0)
-           {
-            m_stopLossLosingCount++;
-            m_stopLossGrossLossMoney+=MathAbs(resultMoney);
-           }
-         else
-           {
-            m_stopLossBreakEvenCount++;
-           }
-   
-         return;
+         m_signalExitLosingCount++;
+         m_signalExitGrossLossMoney+=MathAbs(resultMoney);
         }
-   
-   
-      if(exitReason==PB_VIRTUAL_EXIT_TAKE_PROFIT)
+      else
         {
-         m_takeProfitTotalPoints+=resultPoints;
-         m_takeProfitTotalMoney +=resultMoney;
-   
-         if(resultPoints>0.0)
-           {
-            m_takeProfitWinningCount++;
-            m_takeProfitGrossProfitMoney+=resultMoney;
-           }
-         else if(resultPoints<0.0)
-           {
-            m_takeProfitLosingCount++;
-            m_takeProfitGrossLossMoney+=MathAbs(resultMoney);
-           }
-         else
-           {
-            m_takeProfitBreakEvenCount++;
-           }
+         m_signalExitBreakEvenCount++;
         }
+
+
+      // Croisement sens × motif.
+      if(positionState==PB_VIRTUAL_POSITION_LONG)
+        {
+         m_longSignalExitCount++;
+         m_longSignalExitMoney+=resultMoney;
+        }
+      else if(positionState==PB_VIRTUAL_POSITION_SHORT)
+        {
+         m_shortSignalExitCount++;
+         m_shortSignalExitMoney+=resultMoney;
+        }
+
+      return;
      }
 
+
+   // ==================================================
+   // SORTIE SUR STOP LOSS
+   // ==================================================
+   if(exitReason==PB_VIRTUAL_EXIT_STOP_LOSS)
+     {
+      m_stopLossTotalPoints+=resultPoints;
+      m_stopLossTotalMoney +=resultMoney;
+
+      if(resultPoints>0.0)
+        {
+         m_stopLossWinningCount++;
+         m_stopLossGrossProfitMoney+=resultMoney;
+        }
+      else if(resultPoints<0.0)
+        {
+         m_stopLossLosingCount++;
+         m_stopLossGrossLossMoney+=MathAbs(resultMoney);
+        }
+      else
+        {
+         m_stopLossBreakEvenCount++;
+        }
+
+
+      // Croisement sens × motif.
+      if(positionState==PB_VIRTUAL_POSITION_LONG)
+        {
+         m_longStopLossExitCount++;
+         m_longStopLossExitMoney+=resultMoney;
+        }
+      else if(positionState==PB_VIRTUAL_POSITION_SHORT)
+        {
+         m_shortStopLossExitCount++;
+         m_shortStopLossExitMoney+=resultMoney;
+        }
+
+      return;
+     }
+
+
+   // ==================================================
+   // SORTIE SUR TAKE PROFIT
+   // ==================================================
+   if(exitReason==PB_VIRTUAL_EXIT_TAKE_PROFIT)
+     {
+      m_takeProfitTotalPoints+=resultPoints;
+      m_takeProfitTotalMoney +=resultMoney;
+
+      if(resultPoints>0.0)
+        {
+         m_takeProfitWinningCount++;
+         m_takeProfitGrossProfitMoney+=resultMoney;
+        }
+      else if(resultPoints<0.0)
+        {
+         m_takeProfitLosingCount++;
+         m_takeProfitGrossLossMoney+=MathAbs(resultMoney);
+        }
+      else
+        {
+         m_takeProfitBreakEvenCount++;
+        }
+
+
+      // Croisement sens × motif.
+      if(positionState==PB_VIRTUAL_POSITION_LONG)
+        {
+         m_longTakeProfitExitCount++;
+         m_longTakeProfitExitMoney+=resultMoney;
+        }
+      else if(positionState==PB_VIRTUAL_POSITION_SHORT)
+        {
+         m_shortTakeProfitExitCount++;
+         m_shortTakeProfitExitMoney+=resultMoney;
+        }
+     }
+  }
+  
    // --------------------------------------------------
    // Enregistre le résultat d'un trade clôturé.
    // --------------------------------------------------
@@ -1113,6 +1187,31 @@ public:
 
       m_bestTradePoints =0.0;
       m_worstTradePoints=0.0;
+      
+      // --------------------------------------------------
+      // Croisement LONG / motif de sortie.
+      // --------------------------------------------------
+      m_longSignalExitCount=0;
+      m_longSignalExitMoney=0.0;
+      
+      m_longStopLossExitCount=0;
+      m_longStopLossExitMoney=0.0;
+      
+      m_longTakeProfitExitCount=0;
+      m_longTakeProfitExitMoney=0.0;
+      
+      
+      // --------------------------------------------------
+      // Croisement SHORT / motif de sortie.
+      // --------------------------------------------------
+      m_shortSignalExitCount=0;
+      m_shortSignalExitMoney=0.0;
+      
+      m_shortStopLossExitCount=0;
+      m_shortStopLossExitMoney=0.0;
+      
+      m_shortTakeProfitExitCount=0;
+      m_shortTakeProfitExitMoney=0.0;
      }
 
 
@@ -1370,6 +1469,7 @@ public:
          m_stopLossExitCount++;
       
          RecordExitPerformance(
+            previousState,
             PB_VIRTUAL_EXIT_STOP_LOSS,
             resultPoints,
             resultMoney);
@@ -1381,13 +1481,14 @@ public:
          m_takeProfitExitCount++;
       
          RecordExitPerformance(
+            previousState,
             PB_VIRTUAL_EXIT_TAKE_PROFIT,
             resultPoints,
             resultMoney);
       
          exitReason="TAKE PROFIT";
-        }
-        
+        }  
+                 
       eventMessage=StringFormat(
          "SORTIE VIRTUELLE %s | "
          "Position=%s | "
@@ -1579,10 +1680,11 @@ public:
       m_signalExitCount++;
       
       RecordExitPerformance(
+         previousState,
          PB_VIRTUAL_EXIT_SIGNAL,
          resultPoints,
          resultMoney);
-      
+         
       string openError;
 
       if(!OpenPosition(
@@ -1846,6 +1948,103 @@ public:
          m_stopLossBreakEvenCount+
          m_takeProfitBreakEvenCount!=
          m_breakEvenTradeCount)
+         return false;
+
+      // --------------------------------------------------
+      // Cohérence de la matrice sens × motif de sortie.
+      // --------------------------------------------------
+      
+      // Toutes les positions LONG clôturées doivent être
+      // réparties entre SIGNAL, STOP LOSS et TAKE PROFIT.
+      if(m_longSignalExitCount+
+         m_longStopLossExitCount+
+         m_longTakeProfitExitCount!=
+         m_longClosedTradeCount)
+         return false;
+      
+      
+      // Même contrôle pour les positions SHORT.
+      if(m_shortSignalExitCount+
+         m_shortStopLossExitCount+
+         m_shortTakeProfitExitCount!=
+         m_shortClosedTradeCount)
+         return false;
+      
+      
+      // Toutes les sorties SIGNAL doivent être soit LONG,
+      // soit SHORT.
+      if(m_longSignalExitCount+
+         m_shortSignalExitCount!=
+         m_signalExitCount)
+         return false;
+      
+      
+      // Même contrôle pour les STOP LOSS.
+      if(m_longStopLossExitCount+
+         m_shortStopLossExitCount!=
+         m_stopLossExitCount)
+         return false;
+
+
+      // Même contrôle pour les TAKE PROFIT.
+      if(m_longTakeProfitExitCount+
+         m_shortTakeProfitExitCount!=
+         m_takeProfitExitCount)
+         return false;
+
+      // --------------------------------------------------
+      // Cohérence monétaire de la matrice.
+      // --------------------------------------------------
+      const double moneyTolerance=0.01;
+      
+      
+      // Ligne LONG.
+      if(MathAbs(
+            m_longSignalExitMoney+
+            m_longStopLossExitMoney+
+            m_longTakeProfitExitMoney-
+            m_longTotalClosedMoney)>moneyTolerance)
+         return false;
+
+
+      // Ligne SHORT.
+      if(MathAbs(
+            m_shortSignalExitMoney+
+            m_shortStopLossExitMoney+
+            m_shortTakeProfitExitMoney-
+            m_shortTotalClosedMoney)>moneyTolerance)
+         return false;
+      
+      
+      // Colonne SIGNAL.
+      if(MathAbs(
+            m_longSignalExitMoney+
+            m_shortSignalExitMoney-
+            m_signalExitTotalMoney)>moneyTolerance)
+         return false;
+      
+      
+      // Colonne STOP LOSS.
+      if(MathAbs(
+            m_longStopLossExitMoney+
+            m_shortStopLossExitMoney-
+            m_stopLossTotalMoney)>moneyTolerance)
+         return false;
+      
+      
+      // Colonne TAKE PROFIT.
+      if(MathAbs(
+            m_longTakeProfitExitMoney+
+            m_shortTakeProfitExitMoney-
+            m_takeProfitTotalMoney)>moneyTolerance)
+         return false;
+      
+      
+      // Total LONG + SHORT.
+      if(MathAbs(
+            m_longTotalClosedMoney+
+            m_shortTotalClosedMoney-
+            m_totalClosedMoney)>moneyTolerance)
          return false;
 
       return true;
@@ -2115,6 +2314,56 @@ string BuildTakeProfitSummary(void) const
       profitFactor,
       expectancy);
   }
+ 
+ // --------------------------------------------------
+// Résume la matrice des sorties LONG.
+// --------------------------------------------------
+string BuildLongExitMatrixSummary(void) const
+  {
+   return StringFormat(
+      "Matrice LONG : "
+      "SIGNAL=%d trade(s) / %.2f EUR | "
+      "STOP LOSS=%d trade(s) / %.2f EUR | "
+      "TAKE PROFIT=%d trade(s) / %.2f EUR | "
+      "TOTAL=%d trade(s) / %.2f EUR",
+
+      m_longSignalExitCount,
+      m_longSignalExitMoney,
+
+      m_longStopLossExitCount,
+      m_longStopLossExitMoney,
+
+      m_longTakeProfitExitCount,
+      m_longTakeProfitExitMoney,
+
+      m_longClosedTradeCount,
+      m_longTotalClosedMoney);
+  }
+  
+// --------------------------------------------------
+// Résume la matrice des sorties SHORT.
+// --------------------------------------------------
+string BuildShortExitMatrixSummary(void) const
+  {
+   return StringFormat(
+      "Matrice SHORT : "
+      "SIGNAL=%d trade(s) / %.2f EUR | "
+      "STOP LOSS=%d trade(s) / %.2f EUR | "
+      "TAKE PROFIT=%d trade(s) / %.2f EUR | "
+      "TOTAL=%d trade(s) / %.2f EUR",
+
+      m_shortSignalExitCount,
+      m_shortSignalExitMoney,
+
+      m_shortStopLossExitCount,
+      m_shortStopLossExitMoney,
+
+      m_shortTakeProfitExitCount,
+      m_shortTakeProfitExitMoney,
+
+      m_shortClosedTradeCount,
+      m_shortTotalClosedMoney);
+  }  
    
    // --------------------------------------------------
    // Construit le résumé final.
