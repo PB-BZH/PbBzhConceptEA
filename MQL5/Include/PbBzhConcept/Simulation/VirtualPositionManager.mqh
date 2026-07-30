@@ -3,6 +3,7 @@
 
 #include <PbBzhConcept/Domain/TradeSignal.mqh>
 #include <PbBzhConcept/Simulation/VirtualVolumeCalculator.mqh>
+#include <PbBzhConcept/Domain/MaDynamics.mqh>
 
 
 // --------------------------------------------------
@@ -246,13 +247,216 @@ private:
    double m_shortTakeProfitExitMoney;
    
    // --------------------------------------------------
+   // Analyse détaillée des sorties SIGNAL LONG.
+   // --------------------------------------------------
+   int    m_longSignalWinningCount;
+   int    m_longSignalLosingCount;
+   
+   double m_longSignalWinningMoney;
+   double m_longSignalLosingMoney;
+   
+   
+   // --------------------------------------------------
+   // Analyse détaillée des sorties SIGNAL SHORT.
+   // --------------------------------------------------
+   int    m_shortSignalWinningCount;
+   int    m_shortSignalLosingCount;
+   
+   double m_shortSignalWinningMoney;
+   double m_shortSignalLosingMoney;
+   
+   // --------------------------------------------------
+   // Pente directionnelle de la MA au moment où
+   // la position courante a été ouverte.
+   // --------------------------------------------------
+   double m_currentEntryMaSlopePoints;
+   
+   bool m_currentPositionOpenedAfterInversion;   
+     
+   // --------------------------------------------------
+   // Dynamique complète de la MA au moment de
+   // l'ouverture de la position courante.
+   // --------------------------------------------------
+   SMaDynamics m_currentEntryMaDynamics;   
+   
+   // --------------------------------------------------
+   // Performances des positions ouvertes après inversion.
+   // --------------------------------------------------
+   int m_inversionTradeClosedCount;
+   
+   int m_inversionTradeWinningCount;
+   int m_inversionTradeLosingCount;
+   int m_inversionTradeBreakEvenCount;
+   
+   double m_inversionTradeTotalPoints;
+   double m_inversionTradeTotalMoney;
+   
+   double m_inversionTradeGrossProfitMoney;
+   double m_inversionTradeGrossLossMoney;   
+   
+   // --------------------------------------------------
+   // Positions LONG ouvertes après inversion.
+   // --------------------------------------------------
+   int    m_inversionLongClosedCount;
+   double m_inversionLongTotalMoney;
+   
+   
+   // --------------------------------------------------
+   // Positions SHORT ouvertes après inversion.
+   // --------------------------------------------------
+   int    m_inversionShortClosedCount;
+   double m_inversionShortTotalMoney;   
+   
+   // --------------------------------------------------
+   // Performances des positions ouvertes depuis FLAT.
+   // --------------------------------------------------
+   int m_flatEntryTradeClosedCount;
+   
+   int m_flatEntryTradeWinningCount;
+   int m_flatEntryTradeLosingCount;
+   int m_flatEntryTradeBreakEvenCount;
+   
+   double m_flatEntryTradeTotalPoints;
+   double m_flatEntryTradeTotalMoney;
+   
+   double m_flatEntryTradeGrossProfitMoney;
+   double m_flatEntryTradeGrossLossMoney;
+   
+   
+   // --------------------------------------------------
+   // Positions LONG ouvertes depuis FLAT.
+   // --------------------------------------------------
+   int    m_flatEntryLongClosedCount;
+   double m_flatEntryLongTotalMoney;
+   
+   
+   // --------------------------------------------------
+   // Positions SHORT ouvertes depuis FLAT.
+   // --------------------------------------------------
+   int    m_flatEntryShortClosedCount;
+   double m_flatEntryShortTotalMoney;   
+
+// --------------------------------------------------
+// Entrées depuis FLAT × motif de sortie.
+// --------------------------------------------------
+int    m_flatEntrySignalExitCount;
+double m_flatEntrySignalExitMoney;
+
+int    m_flatEntryStopLossExitCount;
+double m_flatEntryStopLossExitMoney;
+
+int    m_flatEntryTakeProfitExitCount;
+double m_flatEntryTakeProfitExitMoney;
+
+
+// --------------------------------------------------
+// Entrées post-inversion × motif de sortie.
+// --------------------------------------------------
+int    m_inversionEntrySignalExitCount;
+double m_inversionEntrySignalExitMoney;
+
+int    m_inversionEntryStopLossExitCount;
+double m_inversionEntryStopLossExitMoney;
+
+int    m_inversionEntryTakeProfitExitCount;
+double m_inversionEntryTakeProfitExitMoney;
+
+// --------------------------------------------------
+// v1.18 - Pente MA à l'entrée selon origine
+// et résultat du trade.
+// --------------------------------------------------
+
+// Entrées depuis FLAT
+double m_flatEntryWinningSlopeSum;
+double m_flatEntryLosingSlopeSum;
+
+// Entrées post-inversion
+double m_inversionEntryWinningSlopeSum;
+double m_inversionEntryLosingSlopeSum;
+   
+// --------------------------------------------------
+// Remet à zéro une structure SMaDynamics.
+// --------------------------------------------------
+void ResetMaDynamics(SMaDynamics &dynamics)
+  {
+   dynamics.slopeEarlier=0.0;
+   dynamics.slopePrevious=0.0;
+   dynamics.slopeCurrent=0.0;
+
+   dynamics.accelerationPrevious=0.0;
+   dynamics.accelerationCurrent=0.0;
+  }
+
+
+// --------------------------------------------------
+// Ajoute une dynamique à un accumulateur.
+// --------------------------------------------------
+void AddMaDynamics(
+   SMaDynamics       &sum,
+   const SMaDynamics &value)
+  {
+   sum.slopeEarlier+=value.slopeEarlier;
+   sum.slopePrevious+=value.slopePrevious;
+   sum.slopeCurrent+=value.slopeCurrent;
+
+   sum.accelerationPrevious+=
+      value.accelerationPrevious;
+
+   sum.accelerationCurrent+=
+      value.accelerationCurrent;
+  }   
+   
+// --------------------------------------------------
+// Construit une ligne de synthèse des moyennes
+// S2 / S1 / S0 / A1 / A0.
+// --------------------------------------------------
+string BuildMaDynamicsAverageRow(
+   const string      label,
+   const int         tradeCount,
+   const SMaDynamics &sum) const
+  {
+   double s2=0.0;
+   double s1=0.0;
+   double s0=0.0;
+   double a1=0.0;
+   double a0=0.0;
+
+   if(tradeCount>0)
+     {
+      double count=(double)tradeCount;
+
+      s2=sum.slopeEarlier/count;
+      s1=sum.slopePrevious/count;
+      s0=sum.slopeCurrent/count;
+
+      a1=sum.accelerationPrevious/count;
+      a0=sum.accelerationCurrent/count;
+     }
+
+   return StringFormat(
+      "%s : Trades=%d | "
+      "S2=%.2f | S1=%.2f | S0=%.2f pts | "
+      "A1=%.2f | A0=%.2f pts/bougie^2",
+      label,
+      tradeCount,
+      s2,
+      s1,
+      s0,
+      a1,
+      a0);
+  }
+
+   
+   // --------------------------------------------------
    // Ouvre une position virtuelle.
    // --------------------------------------------------
    bool OpenPosition(
       const ENUM_PB_VIRTUAL_POSITION_STATE newState,
       const datetime                       entryTime,
       const double                         entryPrice,
-      string                              &errorMessage)
+      const SMaDynamics                   &entryMaDynamics,
+      const bool                           openedAfterInversion,
+      string                              &errorMessage)      
      {
       errorMessage="";
 
@@ -369,6 +573,30 @@ private:
       m_state      =newState;
       m_entryTime  =entryTime;
       m_entryPrice =entryPrice;
+      
+      // S0 conservé pour les statistiques v1.18 existantes.
+      m_currentEntryMaSlopePoints=
+         entryMaDynamics.slopeCurrent;
+      
+      
+      // Dynamique complète de la MA à l'entrée.
+      m_currentEntryMaDynamics.slopeEarlier=
+         entryMaDynamics.slopeEarlier;
+      
+      m_currentEntryMaDynamics.slopePrevious=
+         entryMaDynamics.slopePrevious;
+      
+      m_currentEntryMaDynamics.slopeCurrent=
+         entryMaDynamics.slopeCurrent;
+      
+      m_currentEntryMaDynamics.accelerationPrevious=
+         entryMaDynamics.accelerationPrevious;
+      
+      m_currentEntryMaDynamics.accelerationCurrent=
+         entryMaDynamics.accelerationCurrent;
+         
+      m_currentPositionOpenedAfterInversion=
+         openedAfterInversion;
 
       m_stopLossPrice  =stopLossPrice;
       m_takeProfitPrice=takeProfitPrice;
@@ -639,15 +867,78 @@ private:
      }
 
 // --------------------------------------------------
+// Enregistre le résultat selon l'origine de l'entrée
+// et le motif de sortie.
+// --------------------------------------------------
+void RecordEntryOriginExitPerformance(
+   const bool                        openedAfterInversion,
+   const ENUM_PB_VIRTUAL_EXIT_REASON exitReason,
+   const double                      resultMoney)
+  {
+   // ==================================================
+   // POSITION OUVERTE APRÈS INVERSION
+   // ==================================================
+   if(openedAfterInversion)
+     {
+      if(exitReason==PB_VIRTUAL_EXIT_SIGNAL)
+        {
+         m_inversionEntrySignalExitCount++;
+         m_inversionEntrySignalExitMoney+=resultMoney;
+        }
+      else if(exitReason==PB_VIRTUAL_EXIT_STOP_LOSS)
+        {
+         m_inversionEntryStopLossExitCount++;
+         m_inversionEntryStopLossExitMoney+=resultMoney;
+        }
+      else if(exitReason==PB_VIRTUAL_EXIT_TAKE_PROFIT)
+        {
+         m_inversionEntryTakeProfitExitCount++;
+         m_inversionEntryTakeProfitExitMoney+=resultMoney;
+        }
+
+      return;
+     }
+
+
+   // ==================================================
+   // POSITION OUVERTE DEPUIS FLAT
+   // ==================================================
+   if(exitReason==PB_VIRTUAL_EXIT_SIGNAL)
+     {
+      m_flatEntrySignalExitCount++;
+      m_flatEntrySignalExitMoney+=resultMoney;
+     }
+   else if(exitReason==PB_VIRTUAL_EXIT_STOP_LOSS)
+     {
+      m_flatEntryStopLossExitCount++;
+      m_flatEntryStopLossExitMoney+=resultMoney;
+     }
+   else if(exitReason==PB_VIRTUAL_EXIT_TAKE_PROFIT)
+     {
+      m_flatEntryTakeProfitExitCount++;
+      m_flatEntryTakeProfitExitMoney+=resultMoney;
+     }
+  }
+  
+
+
+// --------------------------------------------------
 // Enregistre les performances selon le motif
 // de clôture et le sens de la position.
 // --------------------------------------------------
 void RecordExitPerformance(
    const ENUM_PB_VIRTUAL_POSITION_STATE positionState,
+   const bool                           openedAfterInversion,
    const ENUM_PB_VIRTUAL_EXIT_REASON     exitReason,
    const double                          resultPoints,
-   const double                          resultMoney)
+   const double                          resultMoney)   
   {
+  
+     RecordEntryOriginExitPerformance(
+      openedAfterInversion,
+      exitReason,
+      resultMoney);
+      
    // ==================================================
    // SORTIE SUR SIGNAL
    // ==================================================
@@ -672,18 +963,42 @@ void RecordExitPerformance(
         }
 
 
-      // Croisement sens × motif.
+      // --------------------------------------------------
+      // Croisement sens × motif SIGNAL,
+      // avec détail gagnant / perdant.
+      // --------------------------------------------------
       if(positionState==PB_VIRTUAL_POSITION_LONG)
         {
          m_longSignalExitCount++;
          m_longSignalExitMoney+=resultMoney;
+      
+         if(resultPoints>0.0)
+           {
+            m_longSignalWinningCount++;
+            m_longSignalWinningMoney+=resultMoney;
+           }
+         else if(resultPoints<0.0)
+           {
+            m_longSignalLosingCount++;
+            m_longSignalLosingMoney+=MathAbs(resultMoney);
+           }
         }
       else if(positionState==PB_VIRTUAL_POSITION_SHORT)
         {
          m_shortSignalExitCount++;
          m_shortSignalExitMoney+=resultMoney;
+      
+         if(resultPoints>0.0)
+           {
+            m_shortSignalWinningCount++;
+            m_shortSignalWinningMoney+=resultMoney;
+           }
+         else if(resultPoints<0.0)
+           {
+            m_shortSignalLosingCount++;
+            m_shortSignalLosingMoney+=MathAbs(resultMoney);
+           }
         }
-
       return;
      }
 
@@ -765,6 +1080,122 @@ void RecordExitPerformance(
         }
      }
   }
+  
+  // --------------------------------------------------
+// Enregistre le résultat d'une position qui avait
+// été ouverte à la suite d'une inversion.
+// --------------------------------------------------
+void RecordInversionTradePerformance(
+   const ENUM_PB_VIRTUAL_POSITION_STATE positionState,
+   const double                         resultPoints,
+   const double                         resultMoney,
+   const SMaDynamics                   &entryMaDynamics)
+     
+  {
+   m_inversionTradeClosedCount++;
+
+   m_inversionTradeTotalPoints+=resultPoints;
+   m_inversionTradeTotalMoney +=resultMoney;
+
+
+   if(resultPoints>0.0)
+     {
+      m_inversionTradeWinningCount++;
+      m_inversionTradeGrossProfitMoney+=resultMoney;
+      m_inversionEntryWinningSlopeSum+=
+         entryMaDynamics.slopeCurrent;
+      
+      AddMaDynamics(
+         m_inversionEntryWinningDynamicsSum,
+         entryMaDynamics);
+     }
+   else if(resultPoints<0.0)
+     {
+      m_inversionTradeLosingCount++;
+      m_inversionTradeGrossLossMoney+=MathAbs(resultMoney);
+      m_inversionEntryLosingSlopeSum+=
+         entryMaDynamics.slopeCurrent;
+      
+      AddMaDynamics(
+         m_inversionEntryLosingDynamicsSum,
+         entryMaDynamics);      
+     }
+   else
+     {
+      m_inversionTradeBreakEvenCount++;
+     }
+
+   if(positionState==PB_VIRTUAL_POSITION_LONG)
+     {
+      m_inversionLongClosedCount++;
+      m_inversionLongTotalMoney+=resultMoney;
+     }
+   else if(positionState==PB_VIRTUAL_POSITION_SHORT)
+     {
+      m_inversionShortClosedCount++;
+      m_inversionShortTotalMoney+=resultMoney;
+     }
+  }
+  
+// --------------------------------------------------
+// Enregistre le résultat d'une position qui avait
+// été ouverte depuis l'état FLAT.
+// --------------------------------------------------
+void RecordFlatEntryTradePerformance(
+   const ENUM_PB_VIRTUAL_POSITION_STATE positionState,
+   const double                         resultPoints,
+   const double                         resultMoney,
+   const SMaDynamics &entryMaDynamics)   
+  {
+   m_flatEntryTradeClosedCount++;
+
+   m_flatEntryTradeTotalPoints+=resultPoints;
+   m_flatEntryTradeTotalMoney +=resultMoney;
+
+
+   if(resultPoints>0.0)
+     {
+      m_flatEntryTradeWinningCount++;
+      m_flatEntryTradeGrossProfitMoney+=resultMoney;
+      
+      // Ancienne statistique S0 conservée.
+      m_flatEntryWinningSlopeSum+=
+         entryMaDynamics.slopeCurrent;
+      
+      // Nouvelle dynamique complète.
+      AddMaDynamics(
+         m_flatEntryWinningDynamicsSum,
+         entryMaDynamics);
+     }
+   else if(resultPoints<0.0)
+     {
+      m_flatEntryTradeLosingCount++;
+      m_flatEntryTradeGrossLossMoney+=MathAbs(resultMoney);
+
+      m_flatEntryLosingSlopeSum+=
+         entryMaDynamics.slopeCurrent;
+      
+      AddMaDynamics(
+         m_flatEntryLosingDynamicsSum,
+         entryMaDynamics);   
+      }
+   else
+     {
+      m_flatEntryTradeBreakEvenCount++;
+     }
+
+   if(positionState==PB_VIRTUAL_POSITION_LONG)
+     {
+      m_flatEntryLongClosedCount++;
+      m_flatEntryLongTotalMoney+=resultMoney;
+     }
+   else if(positionState==PB_VIRTUAL_POSITION_SHORT)
+     {
+      m_flatEntryShortClosedCount++;
+      m_flatEntryShortTotalMoney+=resultMoney;
+     }
+  }
+  
   
    // --------------------------------------------------
    // Enregistre le résultat d'un trade clôturé.
@@ -1002,17 +1433,50 @@ void RecordExitPerformance(
          return false;
         }
 
+      ENUM_PB_VIRTUAL_POSITION_STATE closedState=
+         m_state;
+      
+      bool wasOpenedAfterInversion=
+         m_currentPositionOpenedAfterInversion;
+         
+      SMaDynamics closedEntryMaDynamics=
+         m_currentEntryMaDynamics;
+   
       RecordClosedTrade(
          exitTime,
-         m_state,
+         closedState,
          resultPoints,
          resultMoney);
       
+      if(wasOpenedAfterInversion)
+         RecordInversionTradePerformance(
+            closedState,
+            resultPoints,
+            resultMoney,
+            closedEntryMaDynamics);
+      else
+         RecordFlatEntryTradePerformance(
+            closedState,
+            resultPoints,
+            resultMoney,
+            closedEntryMaDynamics);
+                  
       m_lastKnownTime=exitTime;
 
       m_state      =PB_VIRTUAL_POSITION_FLAT;
       m_entryTime  =0;
       m_entryPrice =0.0;
+      
+      m_currentEntryMaSlopePoints=0.0;
+      
+      m_currentEntryMaDynamics.slopeEarlier=0.0;
+      m_currentEntryMaDynamics.slopePrevious=0.0;
+      m_currentEntryMaDynamics.slopeCurrent=0.0;
+      
+      m_currentEntryMaDynamics.accelerationPrevious=0.0;
+      m_currentEntryMaDynamics.accelerationCurrent=0.0;      
+      
+      m_currentPositionOpenedAfterInversion=false;
 
       m_stopLossPrice  =0.0;
       m_takeProfitPrice=0.0;
@@ -1212,8 +1676,192 @@ public:
       
       m_shortTakeProfitExitCount=0;
       m_shortTakeProfitExitMoney=0.0;
+      
+      // --------------------------------------------------
+      // Analyse détaillée sorties SIGNAL LONG.
+      // --------------------------------------------------
+      m_longSignalWinningCount=0;
+      m_longSignalLosingCount =0;
+      
+      m_longSignalWinningMoney=0.0;
+      m_longSignalLosingMoney =0.0;
+      
+      
+      // --------------------------------------------------
+      // Analyse détaillée sorties SIGNAL SHORT.
+      // --------------------------------------------------
+      m_shortSignalWinningCount=0;
+      m_shortSignalLosingCount =0;
+      
+      m_shortSignalWinningMoney=0.0;
+      m_shortSignalLosingMoney =0.0;      
+
+      // --------------------------------------------------
+      // Pente MA de la position courante.
+      // --------------------------------------------------
+      m_currentEntryMaSlopePoints=0.0;
+
+      // --------------------------------------------------
+      // Origine de la position courante.
+      // --------------------------------------------------
+      m_currentPositionOpenedAfterInversion=false;
+      
+      
+      // --------------------------------------------------
+      // Performances après inversion.
+      // --------------------------------------------------
+      m_inversionTradeClosedCount=0;
+      
+      m_inversionTradeWinningCount=0;
+      m_inversionTradeLosingCount=0;
+      m_inversionTradeBreakEvenCount=0;
+      
+      m_inversionTradeTotalPoints=0.0;
+      m_inversionTradeTotalMoney =0.0;
+      
+      m_inversionTradeGrossProfitMoney=0.0;
+      m_inversionTradeGrossLossMoney  =0.0;
+      
+      
+      // --------------------------------------------------
+      // Répartition LONG / SHORT après inversion.
+      // --------------------------------------------------
+      m_inversionLongClosedCount=0;
+      m_inversionLongTotalMoney =0.0;
+      
+      m_inversionShortClosedCount=0;
+      m_inversionShortTotalMoney =0.0;
+ 
+      // --------------------------------------------------
+      // Performances des positions ouvertes depuis FLAT.
+      // --------------------------------------------------
+      m_flatEntryTradeClosedCount=0;
+      
+      m_flatEntryTradeWinningCount=0;
+      m_flatEntryTradeLosingCount=0;
+      m_flatEntryTradeBreakEvenCount=0;
+      
+      m_flatEntryTradeTotalPoints=0.0;
+      m_flatEntryTradeTotalMoney =0.0;
+      
+      m_flatEntryTradeGrossProfitMoney=0.0;
+      m_flatEntryTradeGrossLossMoney  =0.0;
+      
+      
+      // --------------------------------------------------
+      // Répartition LONG / SHORT depuis FLAT.
+      // --------------------------------------------------
+      m_flatEntryLongClosedCount=0;
+      m_flatEntryLongTotalMoney =0.0;
+      
+      m_flatEntryShortClosedCount=0;
+      m_flatEntryShortTotalMoney =0.0; 
+
+      // --------------------------------------------------
+      // Entrées depuis FLAT × motif de sortie.
+      // --------------------------------------------------
+      m_flatEntrySignalExitCount=0;
+      m_flatEntrySignalExitMoney=0.0;
+      
+      m_flatEntryStopLossExitCount=0;
+      m_flatEntryStopLossExitMoney=0.0;
+      
+      m_flatEntryTakeProfitExitCount=0;
+      m_flatEntryTakeProfitExitMoney=0.0;
+      
+      
+      // --------------------------------------------------
+      // Entrées post-inversion × motif de sortie.
+      // --------------------------------------------------
+      m_inversionEntrySignalExitCount=0;
+      m_inversionEntrySignalExitMoney=0.0;
+      
+      m_inversionEntryStopLossExitCount=0;
+      m_inversionEntryStopLossExitMoney=0.0;
+      
+      m_inversionEntryTakeProfitExitCount=0;
+      m_inversionEntryTakeProfitExitMoney=0.0;
+      
+      // --------------------------------------------------
+      // v1.18 - Pente MA à l'entrée.
+      // --------------------------------------------------
+      m_flatEntryWinningSlopeSum=0.0;
+      m_flatEntryLosingSlopeSum=0.0;
+      
+      m_inversionEntryWinningSlopeSum=0.0;
+      m_inversionEntryLosingSlopeSum=0.0;
+      
+      m_currentEntryMaDynamics.slopeEarlier=0.0;
+      m_currentEntryMaDynamics.slopePrevious=0.0;
+      m_currentEntryMaDynamics.slopeCurrent=0.0;
+      
+      m_currentEntryMaDynamics.accelerationPrevious=0.0;
+      m_currentEntryMaDynamics.accelerationCurrent=0.0;      
+
+      ResetMaDynamics(
+         m_flatEntryWinningDynamicsSum);
+      
+      ResetMaDynamics(
+         m_flatEntryLosingDynamicsSum);
+      
+      ResetMaDynamics(
+         m_inversionEntryWinningDynamicsSum);
+      
+      ResetMaDynamics(
+         m_inversionEntryLosingDynamicsSum);
+
      }
 
+// --------------------------------------------------
+// v1.18 - Dynamique MA moyenne des trades gagnants
+// ouverts depuis FLAT.
+// --------------------------------------------------
+string BuildFlatWinningMaDynamicsSummary(void) const
+  {
+   return BuildMaDynamicsAverageRow(
+      "Dynamique MA FLAT GAGNANTS",
+      m_flatEntryTradeWinningCount,
+      m_flatEntryWinningDynamicsSum);
+  }
+
+
+// --------------------------------------------------
+// v1.18 - Dynamique MA moyenne des trades perdants
+// ouverts depuis FLAT.
+// --------------------------------------------------
+string BuildFlatLosingMaDynamicsSummary(void) const
+  {
+   return BuildMaDynamicsAverageRow(
+      "Dynamique MA FLAT PERDANTS",
+      m_flatEntryTradeLosingCount,
+      m_flatEntryLosingDynamicsSum);
+  }
+
+
+// --------------------------------------------------
+// v1.18 - Dynamique MA moyenne des trades gagnants
+// ouverts après inversion.
+// --------------------------------------------------
+string BuildInversionWinningMaDynamicsSummary(void) const
+  {
+   return BuildMaDynamicsAverageRow(
+      "Dynamique MA POST-INVERSION GAGNANTS",
+      m_inversionTradeWinningCount,
+      m_inversionEntryWinningDynamicsSum);
+  }
+
+
+// --------------------------------------------------
+// v1.18 - Dynamique MA moyenne des trades perdants
+// ouverts après inversion.
+// --------------------------------------------------
+string BuildInversionLosingMaDynamicsSummary(void) const
+  {
+   return BuildMaDynamicsAverageRow(
+      "Dynamique MA POST-INVERSION PERDANTS",
+      m_inversionTradeLosingCount,
+      m_inversionEntryLosingDynamicsSum);
+  }
 
    // --------------------------------------------------
    // Initialise le gestionnaire.
@@ -1321,6 +1969,73 @@ public:
       return true;
      }
 
+// --------------------------------------------------
+// v1.18 - Résumé de la pente MA à l'entrée
+// pour les positions ouvertes depuis FLAT.
+// --------------------------------------------------
+string BuildFlatEntrySlopeSummary(void) const
+  {
+   double winningAverageSlope=0.0;
+
+   if(m_flatEntryTradeWinningCount>0)
+      winningAverageSlope=
+         m_flatEntryWinningSlopeSum/
+         (double)m_flatEntryTradeWinningCount;
+
+
+   double losingAverageSlope=0.0;
+
+   if(m_flatEntryTradeLosingCount>0)
+      losingAverageSlope=
+         m_flatEntryLosingSlopeSum/
+         (double)m_flatEntryTradeLosingCount;
+
+
+   return StringFormat(
+      "Pente entrée FLAT : "
+      "Gagnants=%d / pente moyenne=%.2f pts | "
+      "Perdants=%d / pente moyenne=%.2f pts",
+
+      m_flatEntryTradeWinningCount,
+      winningAverageSlope,
+
+      m_flatEntryTradeLosingCount,
+      losingAverageSlope);
+  }
+
+// --------------------------------------------------
+// v1.18 - Résumé de la pente MA à l'entrée
+// pour les positions ouvertes post-inversion.
+// --------------------------------------------------
+string BuildInversionEntrySlopeSummary(void) const
+  {
+   double winningAverageSlope=0.0;
+
+   if(m_inversionTradeWinningCount>0)
+      winningAverageSlope=
+         m_inversionEntryWinningSlopeSum/
+         (double)m_inversionTradeWinningCount;
+
+
+   double losingAverageSlope=0.0;
+
+   if(m_inversionTradeLosingCount>0)
+      losingAverageSlope=
+         m_inversionEntryLosingSlopeSum/
+         (double)m_inversionTradeLosingCount;
+
+
+   return StringFormat(
+      "Pente entrée POST-INVERSION : "
+      "Gagnants=%d / pente moyenne=%.2f pts | "
+      "Perdants=%d / pente moyenne=%.2f pts",
+
+      m_inversionTradeWinningCount,
+      winningAverageSlope,
+
+      m_inversionTradeLosingCount,
+      losingAverageSlope);
+  }
 
    // --------------------------------------------------
    // Surveille SL et TP à chaque tick.
@@ -1442,6 +2157,9 @@ public:
 
       ENUM_PB_VIRTUAL_POSITION_STATE previousState=
          m_state;
+         
+      bool previousOpenedAfterInversion=
+         m_currentPositionOpenedAfterInversion;   
 
       datetime previousEntryTime =m_entryTime;
       double   previousEntryPrice=m_entryPrice;
@@ -1468,24 +2186,26 @@ public:
         {
          m_stopLossExitCount++;
       
-         RecordExitPerformance(
-            previousState,
-            PB_VIRTUAL_EXIT_STOP_LOSS,
-            resultPoints,
-            resultMoney);
-      
+      RecordExitPerformance(
+         previousState,
+         previousOpenedAfterInversion,
+         PB_VIRTUAL_EXIT_STOP_LOSS,
+         resultPoints,
+         resultMoney);
+         
          exitReason="STOP LOSS";
         }
       else
         {
          m_takeProfitExitCount++;
       
-         RecordExitPerformance(
-            previousState,
-            PB_VIRTUAL_EXIT_TAKE_PROFIT,
-            resultPoints,
-            resultMoney);
-      
+      RecordExitPerformance(
+         previousState,
+         previousOpenedAfterInversion,
+         PB_VIRTUAL_EXIT_TAKE_PROFIT,
+         resultPoints,
+         resultMoney);
+         
          exitReason="TAKE PROFIT";
         }  
                  
@@ -1543,6 +2263,7 @@ public:
    // --------------------------------------------------
    bool ProcessSignal(
       const ENUM_PB_TRADE_SIGNAL signal,
+      const SMaDynamics         &entryMaDynamics,
       const datetime             executionTime,
       const double               bid,
       const double               ask,
@@ -1598,6 +2319,9 @@ public:
          return false;
         }
 
+      // --------------------------------------------------
+      // Aucune position ouverte : ouverture initiale.
+      // --------------------------------------------------
       if(m_state==PB_VIRTUAL_POSITION_FLAT)
         {
          string openError;
@@ -1606,6 +2330,8 @@ public:
                newState,
                executionTime,
                newEntryPrice,
+               entryMaDynamics,
+               false,
                openError))
            {
             eventMessage=StringFormat(
@@ -1647,11 +2373,18 @@ public:
          return true;
         }
 
+      // Même sens que la position actuelle : rien à faire.
       if(m_state==newState)
          return true;
 
+      // --------------------------------------------------
+      // Signal opposé : fermeture puis inversion.
+      // --------------------------------------------------
       ENUM_PB_VIRTUAL_POSITION_STATE previousState=
          m_state;
+
+      bool previousOpenedAfterInversion=
+         m_currentPositionOpenedAfterInversion;
 
       datetime previousEntryTime =m_entryTime;
       double   previousEntryPrice=m_entryPrice;
@@ -1666,6 +2399,10 @@ public:
       double resultMoney =0.0;
       string closeError;
 
+      // IMPORTANT :
+      // on clôture d'abord l'ancienne position.
+      // CloseCurrentPosition() enregistre les statistiques globales,
+      // FLAT / POST-INVERSION et la dynamique MA de cette position.
       if(!CloseCurrentPosition(
             executionTime,
             exitPrice,
@@ -1678,19 +2415,25 @@ public:
         }
 
       m_signalExitCount++;
-      
+
       RecordExitPerformance(
          previousState,
+         previousOpenedAfterInversion,
          PB_VIRTUAL_EXIT_SIGNAL,
          resultPoints,
          resultMoney);
-         
+
+      // L'ancienne position est maintenant fermée.
+      // On ouvre la position opposée avec la dynamique
+      // correspondant au signal courant.
       string openError;
 
       if(!OpenPosition(
             newState,
             executionTime,
             newEntryPrice,
+            entryMaDynamics,
+            true,
             openError))
         {
          eventMessage=StringFormat(
@@ -2046,10 +2789,725 @@ public:
             m_shortTotalClosedMoney-
             m_totalClosedMoney)>moneyTolerance)
          return false;
+      
+      // --------------------------------------------------
+      // Cohérence du détail des sorties SIGNAL
+      // selon le sens LONG / SHORT.
+      // --------------------------------------------------
+      
+      // Tous les SIGNAL gagnants doivent être répartis
+      // entre LONG et SHORT.
+      if(m_longSignalWinningCount+
+         m_shortSignalWinningCount!=
+         m_signalExitWinningCount)
+         return false;
+      
+      
+      // Tous les SIGNAL perdants doivent être répartis
+      // entre LONG et SHORT.
+      if(m_longSignalLosingCount+
+         m_shortSignalLosingCount!=
+         m_signalExitLosingCount)
+         return false;
+      
+      
+      // Les nombres gagnants/perdants ne peuvent pas
+      // dépasser le nombre de sorties SIGNAL du sens.
+      if(m_longSignalWinningCount+
+         m_longSignalLosingCount>
+         m_longSignalExitCount)
+         return false;
+      
+      if(m_shortSignalWinningCount+
+         m_shortSignalLosingCount>
+         m_shortSignalExitCount)
+         return false;
+
+      // --------------------------------------------------
+      // Cohérence monétaire du détail des sorties SIGNAL.
+      // --------------------------------------------------
+      
+      // Les gains SIGNAL LONG + SHORT doivent retrouver
+      // les gains bruts SIGNAL globaux.
+      if(MathAbs(
+            m_longSignalWinningMoney+
+            m_shortSignalWinningMoney-
+            m_signalExitGrossProfitMoney)>moneyTolerance)
+         return false;
+      
+      
+      // Même contrôle pour les pertes brutes.
+      if(MathAbs(
+            m_longSignalLosingMoney+
+            m_shortSignalLosingMoney-
+            m_signalExitGrossLossMoney)>moneyTolerance)
+         return false;
+      
+      
+      // Résultat net des SIGNAL LONG.
+      if(MathAbs(
+            m_longSignalWinningMoney-
+            m_longSignalLosingMoney-
+            m_longSignalExitMoney)>moneyTolerance)
+         return false;
+      
+      
+      // Résultat net des SIGNAL SHORT.
+      if(MathAbs(
+            m_shortSignalWinningMoney-
+            m_shortSignalLosingMoney-
+            m_shortSignalExitMoney)>moneyTolerance)
+         return false;
+
+      // --------------------------------------------------
+      // Cohérence des positions ouvertes après inversion.
+      // --------------------------------------------------
+      
+      // Toute position post-inversion clôturée doit être
+      // gagnante, perdante ou neutre.
+      if(m_inversionTradeWinningCount+
+         m_inversionTradeLosingCount+
+         m_inversionTradeBreakEvenCount!=
+         m_inversionTradeClosedCount)
+         return false;
+      
+      
+      // Répartition LONG + SHORT.
+      if(m_inversionLongClosedCount+
+         m_inversionShortClosedCount!=
+         m_inversionTradeClosedCount)
+         return false;
+      
+      
+      // Une position FLAT ne peut pas être marquée
+      // comme ayant été ouverte après inversion.
+      if(m_state==PB_VIRTUAL_POSITION_FLAT &&
+         m_currentPositionOpenedAfterInversion)
+         return false;
+
+      // --------------------------------------------------
+      // Cohérence monétaire post-inversion.
+      // --------------------------------------------------
+      
+      // LONG + SHORT = total post-inversion.
+      if(MathAbs(
+            m_inversionLongTotalMoney+
+            m_inversionShortTotalMoney-
+            m_inversionTradeTotalMoney)>moneyTolerance)
+         return false;
+      
+      
+      // Gains bruts - pertes brutes = résultat net.
+      if(MathAbs(
+            m_inversionTradeGrossProfitMoney-
+            m_inversionTradeGrossLossMoney-
+            m_inversionTradeTotalMoney)>moneyTolerance)
+         return false;
+
+      // --------------------------------------------------
+      // Cohérence des positions ouvertes depuis FLAT.
+      // --------------------------------------------------
+      
+      // Toute position ouverte depuis FLAT puis clôturée
+      // doit être gagnante, perdante ou neutre.
+      if(m_flatEntryTradeWinningCount+
+         m_flatEntryTradeLosingCount+
+         m_flatEntryTradeBreakEvenCount!=
+         m_flatEntryTradeClosedCount)
+         return false;
+      
+      
+      // Répartition LONG + SHORT des entrées depuis FLAT.
+      if(m_flatEntryLongClosedCount+
+         m_flatEntryShortClosedCount!=
+         m_flatEntryTradeClosedCount)
+         return false;
+
+      // --------------------------------------------------
+      // Toute position clôturée doit provenir soit
+      // d'une entrée depuis FLAT, soit d'une inversion.
+      // --------------------------------------------------
+      if(m_flatEntryTradeClosedCount+
+         m_inversionTradeClosedCount!=
+         m_closedTradeCount)
+         return false;
+      
+      
+      // Même contrôle pour les gagnants.
+      if(m_flatEntryTradeWinningCount+
+         m_inversionTradeWinningCount!=
+         m_winningTradeCount)
+         return false;
+      
+      
+      // Même contrôle pour les perdants.
+      if(m_flatEntryTradeLosingCount+
+         m_inversionTradeLosingCount!=
+         m_losingTradeCount)
+         return false;
+      
+      
+      // Même contrôle pour les neutres.
+      if(m_flatEntryTradeBreakEvenCount+
+         m_inversionTradeBreakEvenCount!=
+         m_breakEvenTradeCount)
+         return false;
+
+      // --------------------------------------------------
+      // Cohérence selon le sens de la position.
+      // --------------------------------------------------
+      
+      // Tous les LONG proviennent de FLAT ou
+      // d'une inversion.
+      if(m_flatEntryLongClosedCount+
+         m_inversionLongClosedCount!=
+         m_longClosedTradeCount)
+         return false;
+      
+      
+      // Même contrôle pour les SHORT.
+      if(m_flatEntryShortClosedCount+
+         m_inversionShortClosedCount!=
+         m_shortClosedTradeCount)
+         return false;
+
+      // --------------------------------------------------
+      // Cohérence monétaire des entrées depuis FLAT.
+      // --------------------------------------------------
+      
+      // LONG + SHORT = résultat total depuis FLAT.
+      if(MathAbs(
+            m_flatEntryLongTotalMoney+
+            m_flatEntryShortTotalMoney-
+            m_flatEntryTradeTotalMoney)>moneyTolerance)
+         return false;
+      
+      
+      // Gains bruts - pertes brutes = résultat net FLAT.
+      if(MathAbs(
+            m_flatEntryTradeGrossProfitMoney-
+            m_flatEntryTradeGrossLossMoney-
+            m_flatEntryTradeTotalMoney)>moneyTolerance)
+         return false;
+
+
+      // --------------------------------------------------
+      // FLAT + POST-INVERSION = résultat global.
+      // --------------------------------------------------
+      if(MathAbs(
+            m_flatEntryTradeTotalMoney+
+            m_inversionTradeTotalMoney-
+            m_totalClosedMoney)>moneyTolerance)
+         return false;
+      
+      
+      // Gains bruts des deux populations = gains globaux.
+      if(MathAbs(
+            m_flatEntryTradeGrossProfitMoney+
+            m_inversionTradeGrossProfitMoney-
+            m_grossProfitMoney)>moneyTolerance)
+         return false;
+      
+      
+      // Pertes brutes des deux populations = pertes globales.
+      if(MathAbs(
+            m_flatEntryTradeGrossLossMoney+
+            m_inversionTradeGrossLossMoney-
+            m_grossLossMoney)>moneyTolerance)
+         return false;
+
+// --------------------------------------------------
+// Cohérence origine de l'entrée × motif de sortie.
+// --------------------------------------------------
+
+// Toutes les positions ouvertes depuis FLAT doivent
+// se terminer par SIGNAL, STOP LOSS ou TAKE PROFIT.
+if(m_flatEntrySignalExitCount+
+   m_flatEntryStopLossExitCount+
+   m_flatEntryTakeProfitExitCount!=
+   m_flatEntryTradeClosedCount)
+   return false;
+
+
+// Même contrôle pour les positions post-inversion.
+if(m_inversionEntrySignalExitCount+
+   m_inversionEntryStopLossExitCount+
+   m_inversionEntryTakeProfitExitCount!=
+   m_inversionTradeClosedCount)
+   return false;
+
+
+// Toutes les sorties SIGNAL doivent provenir
+// d'une entrée depuis FLAT ou post-inversion.
+if(m_flatEntrySignalExitCount+
+   m_inversionEntrySignalExitCount!=
+   m_signalExitCount)
+   return false;
+
+
+// Même contrôle pour les STOP LOSS.
+if(m_flatEntryStopLossExitCount+
+   m_inversionEntryStopLossExitCount!=
+   m_stopLossExitCount)
+   return false;
+
+
+// Même contrôle pour les TAKE PROFIT.
+if(m_flatEntryTakeProfitExitCount+
+   m_inversionEntryTakeProfitExitCount!=
+   m_takeProfitExitCount)
+   return false;
+   
+// --------------------------------------------------
+// Cohérence monétaire origine × motif de sortie.
+// --------------------------------------------------
+
+// Ligne : entrées depuis FLAT.
+if(MathAbs(
+      m_flatEntrySignalExitMoney+
+      m_flatEntryStopLossExitMoney+
+      m_flatEntryTakeProfitExitMoney-
+      m_flatEntryTradeTotalMoney)>moneyTolerance)
+   return false;
+
+
+// Ligne : entrées post-inversion.
+if(MathAbs(
+      m_inversionEntrySignalExitMoney+
+      m_inversionEntryStopLossExitMoney+
+      m_inversionEntryTakeProfitExitMoney-
+      m_inversionTradeTotalMoney)>moneyTolerance)
+   return false;
+
+
+// Colonne : sorties SIGNAL.
+if(MathAbs(
+      m_flatEntrySignalExitMoney+
+      m_inversionEntrySignalExitMoney-
+      m_signalExitTotalMoney)>moneyTolerance)
+   return false;
+
+
+// Colonne : sorties STOP LOSS.
+if(MathAbs(
+      m_flatEntryStopLossExitMoney+
+      m_inversionEntryStopLossExitMoney-
+      m_stopLossTotalMoney)>moneyTolerance)
+   return false;
+
+
+// Colonne : sorties TAKE PROFIT.
+if(MathAbs(
+      m_flatEntryTakeProfitExitMoney+
+      m_inversionEntryTakeProfitExitMoney-
+      m_takeProfitTotalMoney)>moneyTolerance)
+   return false;
+
+// --------------------------------------------------
+// v1.18 - Cohérence des statistiques de dynamique MA.
+//
+// slopeCurrent correspond exactement à l'ancienne
+// statistique de pente directionnelle S0.
+// --------------------------------------------------
+
+if(MathAbs(
+      m_flatEntryWinningDynamicsSum.slopeCurrent-
+      m_flatEntryWinningSlopeSum)>moneyTolerance)
+   return false;
+
+if(MathAbs(
+      m_flatEntryLosingDynamicsSum.slopeCurrent-
+      m_flatEntryLosingSlopeSum)>moneyTolerance)
+   return false;
+
+if(MathAbs(
+      m_inversionEntryWinningDynamicsSum.slopeCurrent-
+      m_inversionEntryWinningSlopeSum)>moneyTolerance)
+   return false;
+
+if(MathAbs(
+      m_inversionEntryLosingDynamicsSum.slopeCurrent-
+      m_inversionEntryLosingSlopeSum)>moneyTolerance)      
+   return false;
 
       return true;
      }
 
+// --------------------------------------------------
+// v1.18 - Sommes des dynamiques MA à l'entrée.
+//
+// Elles permettront de calculer les moyennes de :
+// S2, S1, S0, A1 et A0.
+// --------------------------------------------------
+
+// Entrées depuis FLAT
+SMaDynamics m_flatEntryWinningDynamicsSum;
+SMaDynamics m_flatEntryLosingDynamicsSum;
+
+// Entrées post-inversion
+SMaDynamics m_inversionEntryWinningDynamicsSum;
+SMaDynamics m_inversionEntryLosingDynamicsSum;
+
+// --------------------------------------------------
+// Matrice des positions ouvertes depuis FLAT
+// selon leur motif de sortie.
+// --------------------------------------------------
+string BuildFlatEntryExitMatrixSummary(void) const
+  {
+   return StringFormat(
+      "Matrice entrée FLAT : "
+      "SIGNAL=%d trade(s) / %.2f EUR | "
+      "STOP LOSS=%d trade(s) / %.2f EUR | "
+      "TAKE PROFIT=%d trade(s) / %.2f EUR | "
+      "TOTAL=%d trade(s) / %.2f EUR",
+
+      m_flatEntrySignalExitCount,
+      m_flatEntrySignalExitMoney,
+
+      m_flatEntryStopLossExitCount,
+      m_flatEntryStopLossExitMoney,
+
+      m_flatEntryTakeProfitExitCount,
+      m_flatEntryTakeProfitExitMoney,
+
+      m_flatEntryTradeClosedCount,
+      m_flatEntryTradeTotalMoney);
+  }
+  
+// --------------------------------------------------
+// Matrice des positions ouvertes après inversion
+// selon leur motif de sortie.
+// --------------------------------------------------
+string BuildInversionEntryExitMatrixSummary(void) const
+  {
+   return StringFormat(
+      "Matrice entrée POST-INVERSION : "
+      "SIGNAL=%d trade(s) / %.2f EUR | "
+      "STOP LOSS=%d trade(s) / %.2f EUR | "
+      "TAKE PROFIT=%d trade(s) / %.2f EUR | "
+      "TOTAL=%d trade(s) / %.2f EUR",
+
+      m_inversionEntrySignalExitCount,
+      m_inversionEntrySignalExitMoney,
+
+      m_inversionEntryStopLossExitCount,
+      m_inversionEntryStopLossExitMoney,
+
+      m_inversionEntryTakeProfitExitCount,
+      m_inversionEntryTakeProfitExitMoney,
+
+      m_inversionTradeClosedCount,
+      m_inversionTradeTotalMoney);
+  }  
+
+   // --------------------------------------------------
+   // Résume les sorties sur SIGNAL des positions LONG.
+   // --------------------------------------------------
+   string BuildLongSignalDetailSummary(void) const
+     {
+      int neutralCount=
+         m_longSignalExitCount-
+         m_longSignalWinningCount-
+         m_longSignalLosingCount;
+   
+      double winRate=0.0;
+   
+      if(m_longSignalExitCount>0)
+         winRate=
+            100.0*
+            (double)m_longSignalWinningCount/
+            (double)m_longSignalExitCount;
+   
+   
+      double expectancy=0.0;
+   
+      if(m_longSignalExitCount>0)
+         expectancy=
+            m_longSignalExitMoney/
+            (double)m_longSignalExitCount;
+   
+   
+      double profitFactor=0.0;
+   
+      if(m_longSignalLosingMoney>0.0)
+         profitFactor=
+            m_longSignalWinningMoney/
+            m_longSignalLosingMoney;
+   
+   
+      return StringFormat(
+         "Détail SIGNAL LONG : "
+         "Trades=%d | "
+         "Gagnants=%d | "
+         "Perdants=%d | "
+         "Neutres=%d | "
+         "Taux réussite=%.2f%% | "
+         "Gains=%.2f EUR | "
+         "Pertes=%.2f EUR | "
+         "Net=%.2f EUR | "
+         "Profit factor=%.2f | "
+         "Espérance=%.2f EUR",
+   
+         m_longSignalExitCount,
+         m_longSignalWinningCount,
+         m_longSignalLosingCount,
+         neutralCount,
+         winRate,
+         m_longSignalWinningMoney,
+         m_longSignalLosingMoney,
+         m_longSignalExitMoney,
+         profitFactor,
+         expectancy);
+     }   
+   
+   // --------------------------------------------------
+   // Résume les sorties sur SIGNAL des positions SHORT.
+   // --------------------------------------------------
+   string BuildShortSignalDetailSummary(void) const
+     {
+      int neutralCount=
+         m_shortSignalExitCount-
+         m_shortSignalWinningCount-
+         m_shortSignalLosingCount;
+   
+      double winRate=0.0;
+   
+      if(m_shortSignalExitCount>0)
+         winRate=
+            100.0*
+            (double)m_shortSignalWinningCount/
+            (double)m_shortSignalExitCount;
+   
+   
+      double expectancy=0.0;
+   
+      if(m_shortSignalExitCount>0)
+         expectancy=
+            m_shortSignalExitMoney/
+            (double)m_shortSignalExitCount;
+   
+   
+      double profitFactor=0.0;
+   
+      if(m_shortSignalLosingMoney>0.0)
+         profitFactor=
+            m_shortSignalWinningMoney/
+            m_shortSignalLosingMoney;
+   
+   
+      return StringFormat(
+         "Détail SIGNAL SHORT : "
+         "Trades=%d | "
+         "Gagnants=%d | "
+         "Perdants=%d | "
+         "Neutres=%d | "
+         "Taux réussite=%.2f%% | "
+         "Gains=%.2f EUR | "
+         "Pertes=%.2f EUR | "
+         "Net=%.2f EUR | "
+         "Profit factor=%.2f | "
+         "Espérance=%.2f EUR",
+   
+         m_shortSignalExitCount,
+         m_shortSignalWinningCount,
+         m_shortSignalLosingCount,
+         neutralCount,
+         winRate,
+         m_shortSignalWinningMoney,
+         m_shortSignalLosingMoney,
+         m_shortSignalExitMoney,
+         profitFactor,
+         expectancy);
+     }   
+
+// --------------------------------------------------
+// Résume les performances des positions ouvertes
+// depuis FLAT, donc sans position préalable.
+// --------------------------------------------------
+string BuildFlatEntryTradeSummary(void) const
+  {
+   double profitFactor=0.0;
+
+   if(m_flatEntryTradeGrossLossMoney>0.0)
+      profitFactor=
+         m_flatEntryTradeGrossProfitMoney/
+         m_flatEntryTradeGrossLossMoney;
+
+
+   double expectancy=0.0;
+
+   if(m_flatEntryTradeClosedCount>0)
+      expectancy=
+         m_flatEntryTradeTotalMoney/
+         (double)m_flatEntryTradeClosedCount;
+
+
+   double winRate=0.0;
+
+   if(m_flatEntryTradeClosedCount>0)
+      winRate=
+         100.0*
+         (double)m_flatEntryTradeWinningCount/
+         (double)m_flatEntryTradeClosedCount;
+
+
+   return StringFormat(
+      "Résumé entrée depuis FLAT : "
+      "Trades=%d | "
+      "Gagnants=%d | "
+      "Perdants=%d | "
+      "Neutres=%d | "
+      "Taux réussite=%.2f%% | "
+      "Points=%.1f | "
+      "Gains=%.2f EUR | "
+      "Pertes=%.2f EUR | "
+      "Net=%.2f EUR | "
+      "Profit factor=%.2f | "
+      "Espérance=%.2f EUR",
+
+      m_flatEntryTradeClosedCount,
+      m_flatEntryTradeWinningCount,
+      m_flatEntryTradeLosingCount,
+      m_flatEntryTradeBreakEvenCount,
+      winRate,
+      m_flatEntryTradeTotalPoints,
+      m_flatEntryTradeGrossProfitMoney,
+      m_flatEntryTradeGrossLossMoney,
+      m_flatEntryTradeTotalMoney,
+      profitFactor,
+      expectancy);
+  }
+  
+// --------------------------------------------------
+// Résume les LONG / SHORT ouverts depuis FLAT.
+// --------------------------------------------------
+string BuildFlatEntryDirectionSummary(void) const
+  {
+   double longExpectancy=0.0;
+
+   if(m_flatEntryLongClosedCount>0)
+      longExpectancy=
+         m_flatEntryLongTotalMoney/
+         (double)m_flatEntryLongClosedCount;
+
+
+   double shortExpectancy=0.0;
+
+   if(m_flatEntryShortClosedCount>0)
+      shortExpectancy=
+         m_flatEntryShortTotalMoney/
+         (double)m_flatEntryShortClosedCount;
+
+
+   return StringFormat(
+      "Détail entrée depuis FLAT : "
+      "LONG=%d trade(s) / %.2f EUR / espérance=%.2f EUR | "
+      "SHORT=%d trade(s) / %.2f EUR / espérance=%.2f EUR",
+
+      m_flatEntryLongClosedCount,
+      m_flatEntryLongTotalMoney,
+      longExpectancy,
+
+      m_flatEntryShortClosedCount,
+      m_flatEntryShortTotalMoney,
+      shortExpectancy);
+  }
+  
+  
+   // --------------------------------------------------
+   // Résume les performances des positions ouvertes
+   // après une inversion.
+   // --------------------------------------------------
+   string BuildInversionTradeSummary(void) const
+     {
+      double profitFactor=0.0;
+   
+      if(m_inversionTradeGrossLossMoney>0.0)
+         profitFactor=
+            m_inversionTradeGrossProfitMoney/
+            m_inversionTradeGrossLossMoney;
+   
+   
+      double expectancy=0.0;
+   
+      if(m_inversionTradeClosedCount>0)
+         expectancy=
+            m_inversionTradeTotalMoney/
+            (double)m_inversionTradeClosedCount;
+   
+   
+      double winRate=0.0;
+   
+      if(m_inversionTradeClosedCount>0)
+         winRate=
+            100.0*
+            (double)m_inversionTradeWinningCount/
+            (double)m_inversionTradeClosedCount;
+   
+   
+      return StringFormat(
+         "Résumé post-inversion : "
+         "Trades=%d | "
+         "Gagnants=%d | "
+         "Perdants=%d | "
+         "Neutres=%d | "
+         "Taux réussite=%.2f%% | "
+         "Points=%.1f | "
+         "Gains=%.2f EUR | "
+         "Pertes=%.2f EUR | "
+         "Net=%.2f EUR | "
+         "Profit factor=%.2f | "
+         "Espérance=%.2f EUR",
+   
+         m_inversionTradeClosedCount,
+         m_inversionTradeWinningCount,
+         m_inversionTradeLosingCount,
+         m_inversionTradeBreakEvenCount,
+         winRate,
+         m_inversionTradeTotalPoints,
+         m_inversionTradeGrossProfitMoney,
+         m_inversionTradeGrossLossMoney,
+         m_inversionTradeTotalMoney,
+         profitFactor,
+         expectancy);
+       }
+
+   // --------------------------------------------------
+   // Résume la répartition LONG / SHORT des positions
+   // ouvertes après inversion.
+   // --------------------------------------------------
+   string BuildInversionDirectionSummary(void) const
+     {
+      double longExpectancy=0.0;
+   
+      if(m_inversionLongClosedCount>0)
+         longExpectancy=
+            m_inversionLongTotalMoney/
+            (double)m_inversionLongClosedCount;
+   
+   
+      double shortExpectancy=0.0;
+   
+      if(m_inversionShortClosedCount>0)
+         shortExpectancy=
+            m_inversionShortTotalMoney/
+            (double)m_inversionShortClosedCount;
+   
+   
+      return StringFormat(
+         "Détail post-inversion : "
+         "LONG=%d trade(s) / %.2f EUR / espérance=%.2f EUR | "
+         "SHORT=%d trade(s) / %.2f EUR / espérance=%.2f EUR",
+   
+         m_inversionLongClosedCount,
+         m_inversionLongTotalMoney,
+         longExpectancy,
+   
+         m_inversionShortClosedCount,
+         m_inversionShortTotalMoney,
+         shortExpectancy);
+     }
+   
    // --------------------------------------------------
    // Résume les périodes des drawdowns maximaux.
    // --------------------------------------------------

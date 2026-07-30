@@ -2,6 +2,7 @@
 #define PB_BZH_MA_PRICE_CROSS_SIGNAL_MQH
 
 #include <PbBzhConcept\Domain\TradeSignal.mqh>
+#include <PbBzhConcept\Domain\MaDynamics.mqh>
 
 // Photographie des données utilisées pour prendre la décision.
 // bar1 = dernière bougie clôturée ; bar2 = bougie clôturée précédente.
@@ -21,11 +22,50 @@ struct SMaPriceCrossSnapshot
    double               bar2Close;
 
    // Valeurs de la moyenne mobile.
-   double               bar1Ma;
-   double               bar2Ma;
-
-   ENUM_PB_TRADE_SIGNAL signal;
-  };
+   double bar1Ma;
+   double bar2Ma;
+   double bar3Ma;
+   double bar4Ma;
+   
+   // --------------------------------------------------
+   // Dynamique locale de la moyenne mobile.
+   //
+   // S0 = pente entre MA[2] et MA[1] : au croisement
+   // S1 = pente entre MA[3] et MA[2] : juste avant
+   // S2 = pente entre MA[4] et MA[3] : encore avant
+   //
+   // A0 = S0 - S1 : évolution de pente au croisement
+   // A1 = S1 - S2 : évolution de pente avant croisement
+   // --------------------------------------------------
+   
+   // Grandeurs brutes.
+   double maSlopePoints;              // S0
+   double previousMaSlopePoints;      // S1
+   double earlierMaSlopePoints;       // S2
+   
+   double maAccelerationPoints;       // A0
+   double previousMaAccelerationPoints; // A1
+   
+   // Grandeurs orientées dans le sens du signal.
+   double directionalMaSlopePoints;              // S0
+   double directionalPreviousMaSlopePoints;      // S1
+   double directionalEarlierMaSlopePoints;       // S2
+   
+   double directionalMaAccelerationPoints;       // A0
+   double directionalPreviousMaAccelerationPoints; // A1
+   
+   // --------------------------------------------------
+   // Représentation structurée de la dynamique MA.
+   //
+   // maDynamics : valeurs mathématiques brutes.
+   // directionalMaDynamics : valeurs orientées dans
+   // le sens du signal BUY ou SELL.
+   // --------------------------------------------------
+   SMaDynamics maDynamics;
+   SMaDynamics directionalMaDynamics;
+   
+   ENUM_PB_TRADE_SIGNAL signal;  
+   };
   
 // Stratégie volontairement simple et explicite :
 // BUY  lorsque le cours clôturé passe de sous la MA à au-dessus de la MA.
@@ -222,12 +262,85 @@ public:
          !ReadLowValue(1,snapshot.bar1Low)         ||
          !ReadCloseValue(1,snapshot.bar1Close)     ||
          !ReadCloseValue(2,snapshot.bar2Close)     ||
-         !ReadMaValue(1,snapshot.bar1Ma)           ||
-         !ReadMaValue(2,snapshot.bar2Ma))
+         !ReadMaValue(1,snapshot.bar1Ma) ||
+         !ReadMaValue(2,snapshot.bar2Ma) ||
+         !ReadMaValue(3,snapshot.bar3Ma) ||
+         !ReadMaValue(4,snapshot.bar4Ma))         
         {
          return false;
         }
-        
+      
+      // --------------------------------------------------
+      // Calcul de la pente de la moyenne mobile.
+      //
+      // La pente est exprimée en points par bougie :
+      //    MA[1] - MA[2]
+      // --------------------------------------------------
+      double point=SymbolInfoDouble(m_symbol,SYMBOL_POINT);
+      
+      if(point<=0.0)
+        {
+         PrintFormat(
+            "[CMaPriceCrossSignal][ERROR] "
+            "Valeur SYMBOL_POINT invalide pour %s.",
+            m_symbol);
+      
+         return false;
+        }
+      
+      // --------------------------------------------------
+      // Première dérivée discrète.
+      //
+      // Les valeurs sont exprimées en points par bougie.
+      // --------------------------------------------------
+      
+      // S0 : pente au moment du croisement.
+      snapshot.maSlopePoints=
+         (snapshot.bar1Ma-snapshot.bar2Ma)/point;
+      
+      // S1 : pente juste avant le croisement.
+      snapshot.previousMaSlopePoints=
+         (snapshot.bar2Ma-snapshot.bar3Ma)/point;
+      
+      // S2 : pente encore une bougie auparavant.
+      snapshot.earlierMaSlopePoints=
+         (snapshot.bar3Ma-snapshot.bar4Ma)/point;
+           
+      // --------------------------------------------------
+      // Seconde dérivée discrète.
+      //
+      // A0 = évolution de la pente entre S1 et S0.
+      // A1 = évolution de la pente entre S2 et S1.
+      //
+      // Unité conceptuelle : points par bougie².
+      // --------------------------------------------------
+      snapshot.maAccelerationPoints=
+         snapshot.maSlopePoints-
+         snapshot.previousMaSlopePoints;
+      
+      snapshot.previousMaAccelerationPoints=
+         snapshot.previousMaSlopePoints-
+         snapshot.earlierMaSlopePoints;
+
+      // --------------------------------------------------
+      // Regroupement de la dynamique brute.
+      // --------------------------------------------------
+      snapshot.maDynamics.slopeEarlier=
+         snapshot.earlierMaSlopePoints;
+      
+      snapshot.maDynamics.slopePrevious=
+         snapshot.previousMaSlopePoints;
+      
+      snapshot.maDynamics.slopeCurrent=
+         snapshot.maSlopePoints;
+      
+      snapshot.maDynamics.accelerationPrevious=
+         snapshot.previousMaAccelerationPoints;
+      
+      snapshot.maDynamics.accelerationCurrent=
+         snapshot.maAccelerationPoints;
+      
+      
       // --------------------------------------------------
       // Détection brute du croisement du prix avec la MA.
       // --------------------------------------------------
@@ -261,17 +374,91 @@ public:
       if(buyCross && buySlopeAccepted)
         {
          snapshot.signal=PB_SIGNAL_BUY;
+      
+         snapshot.directionalMaSlopePoints=
+            snapshot.maSlopePoints;
+      
+         snapshot.directionalPreviousMaSlopePoints=
+            snapshot.previousMaSlopePoints;
+      
+         snapshot.directionalEarlierMaSlopePoints=
+            snapshot.earlierMaSlopePoints;
+      
+         snapshot.directionalMaAccelerationPoints=
+            snapshot.maAccelerationPoints;
+      
+         snapshot.directionalPreviousMaAccelerationPoints=
+            snapshot.previousMaAccelerationPoints;
+
+         snapshot.directionalMaDynamics.slopeEarlier=
+            snapshot.directionalEarlierMaSlopePoints;
+         
+         snapshot.directionalMaDynamics.slopePrevious=
+            snapshot.directionalPreviousMaSlopePoints;
+         
+         snapshot.directionalMaDynamics.slopeCurrent=
+            snapshot.directionalMaSlopePoints;
+         
+         snapshot.directionalMaDynamics.accelerationPrevious=
+            snapshot.directionalPreviousMaAccelerationPoints;
+         
+         snapshot.directionalMaDynamics.accelerationCurrent=
+            snapshot.directionalMaAccelerationPoints;
         }
       else if(sellCross && sellSlopeAccepted)
         {
          snapshot.signal=PB_SIGNAL_SELL;
-        }
+      
+         snapshot.directionalMaSlopePoints=
+            -snapshot.maSlopePoints;
+      
+         snapshot.directionalPreviousMaSlopePoints=
+            -snapshot.previousMaSlopePoints;
+      
+         snapshot.directionalEarlierMaSlopePoints=
+            -snapshot.earlierMaSlopePoints;
+      
+         snapshot.directionalMaAccelerationPoints=
+            -snapshot.maAccelerationPoints;
+      
+         snapshot.directionalPreviousMaAccelerationPoints=
+            -snapshot.previousMaAccelerationPoints;
+            
+         snapshot.directionalMaDynamics.slopeEarlier=
+            snapshot.directionalEarlierMaSlopePoints;
+         
+         snapshot.directionalMaDynamics.slopePrevious=
+            snapshot.directionalPreviousMaSlopePoints;
+         
+         snapshot.directionalMaDynamics.slopeCurrent=
+            snapshot.directionalMaSlopePoints;
+         
+         snapshot.directionalMaDynamics.accelerationPrevious=
+            snapshot.directionalPreviousMaAccelerationPoints;
+         
+         snapshot.directionalMaDynamics.accelerationCurrent=
+            snapshot.directionalMaAccelerationPoints;            
+        }        
       else
         {
          snapshot.signal=PB_SIGNAL_NONE;
+      
+         snapshot.directionalMaSlopePoints=0.0;
+         snapshot.directionalPreviousMaSlopePoints=0.0;
+         snapshot.directionalEarlierMaSlopePoints=0.0;
+      
+         snapshot.directionalMaAccelerationPoints=0.0;
+         snapshot.directionalPreviousMaAccelerationPoints=0.0;
+         
+         snapshot.directionalMaDynamics.slopeEarlier=0.0;
+         snapshot.directionalMaDynamics.slopePrevious=0.0;
+         snapshot.directionalMaDynamics.slopeCurrent=0.0;
+         
+         snapshot.directionalMaDynamics.accelerationPrevious=0.0;
+         snapshot.directionalMaDynamics.accelerationCurrent=0.0;
         }
-  
-      return true;
+        
+      return true;  
      }
   };
 
