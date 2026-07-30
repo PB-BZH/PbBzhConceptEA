@@ -4,6 +4,7 @@
 #include <PbBzhConcept/Domain/TradeSignal.mqh>
 #include <PbBzhConcept/Simulation/VirtualVolumeCalculator.mqh>
 #include <PbBzhConcept/Domain/MaDynamics.mqh>
+#include <PbBzhConcept/Domain/LocalMarketDynamics.mqh>
 
 
 // --------------------------------------------------
@@ -279,6 +280,32 @@ private:
    // --------------------------------------------------
    SMaDynamics m_currentEntryMaDynamics;   
    
+
+// --------------------------------------------------
+// Dynamique locale M5 observée au moment de
+// l'ouverture de la position courante.
+// --------------------------------------------------
+SLocalMarketDynamics m_currentEntryLocalDynamics;
+
+// --------------------------------------------------
+// v1.20 - Dynamique locale M5 à l'entrée.
+//
+// Une somme et un nombre d'observations valides
+// pour chacune des quatre populations.
+// --------------------------------------------------
+
+SLocalMarketDynamics m_flatEntryWinningLocalDynamicsSum;
+SLocalMarketDynamics m_flatEntryLosingLocalDynamicsSum;
+
+SLocalMarketDynamics m_inversionEntryWinningLocalDynamicsSum;
+SLocalMarketDynamics m_inversionEntryLosingLocalDynamicsSum;
+
+int m_flatEntryWinningLocalDynamicsCount;
+int m_flatEntryLosingLocalDynamicsCount;
+
+int m_inversionEntryWinningLocalDynamicsCount;
+int m_inversionEntryLosingLocalDynamicsCount;
+
    // --------------------------------------------------
    // Performances des positions ouvertes après inversion.
    // --------------------------------------------------
@@ -405,6 +432,112 @@ void AddMaDynamics(
    sum.accelerationCurrent+=
       value.accelerationCurrent;
   }   
+
+// --------------------------------------------------
+// Construit une ligne de synthèse de la dynamique
+// locale observée à l'entrée.
+//
+// Les moyennes sont calculées uniquement sur les
+// observations M5 valides.
+// --------------------------------------------------
+string BuildLocalDynamicsAverageRow(
+   const string                label,
+   const int                   tradeCount,
+   const int                   localCount,
+   const SLocalMarketDynamics &sum) const
+  {
+   double change=0.0;
+   double range=0.0;
+   double slope=0.0;
+   double curvature=0.0;
+   double rSquared=0.0;
+
+   if(localCount>0)
+     {
+      double count=(double)localCount;
+
+      change=
+         sum.directionalChangePoints/count;
+
+      range=
+         sum.rangePoints/count;
+
+      slope=
+         sum.directionalSlopePointsPerHour/count;
+
+      curvature=
+         sum.directionalCurvaturePointsPerHour2/count;
+
+      rSquared=
+         sum.quadraticRSquared/count;
+     }
+
+   return StringFormat(
+      "%s : N local=%d/%d | "
+      "Variation dir. moy=%.2f pts | "
+      "Amplitude moy=%.2f pts | "
+      "Pente dir. moy=%.2f pts/h | "
+      "Courbure dir. moy=%.2f pts/h^2 | "
+      "R2 moy=%.4f",
+      label,
+      localCount,
+      tradeCount,
+      change,
+      range,
+      slope,
+      curvature,
+      rSquared);
+  }
+
+// --------------------------------------------------
+// Remise à zéro d'une dynamique locale.
+// --------------------------------------------------
+void ResetLocalMarketDynamics(
+   SLocalMarketDynamics &dynamics)
+  {
+   dynamics.isValid=false;
+
+   dynamics.directionalChangePoints=0.0;
+   dynamics.rangePoints=0.0;
+
+   dynamics.directionalSlopePointsPerHour=0.0;
+   dynamics.directionalCurvaturePointsPerHour2=0.0;
+
+   dynamics.quadraticRSquared=0.0;
+  }
+
+
+// --------------------------------------------------
+// Ajoute une observation locale à un accumulateur.
+//
+// Retourne false si l'observation n'est pas valide.
+// --------------------------------------------------
+bool AddLocalMarketDynamics(
+   SLocalMarketDynamics       &sum,
+   const SLocalMarketDynamics &value)
+  {
+   if(!value.isValid)
+      return false;
+
+   sum.directionalChangePoints+=
+      value.directionalChangePoints;
+
+   sum.rangePoints+=
+      value.rangePoints;
+
+   sum.directionalSlopePointsPerHour+=
+      value.directionalSlopePointsPerHour;
+
+   sum.directionalCurvaturePointsPerHour2+=
+      value.directionalCurvaturePointsPerHour2;
+
+   sum.quadraticRSquared+=
+      value.quadraticRSquared;
+
+   sum.isValid=true;
+
+   return true;
+  }
    
 // --------------------------------------------------
 // Construit une ligne de synthèse des moyennes
@@ -450,13 +583,14 @@ string BuildMaDynamicsAverageRow(
    // --------------------------------------------------
    // Ouvre une position virtuelle.
    // --------------------------------------------------
-   bool OpenPosition(
-      const ENUM_PB_VIRTUAL_POSITION_STATE newState,
-      const datetime                       entryTime,
-      const double                         entryPrice,
-      const SMaDynamics                   &entryMaDynamics,
-      const bool                           openedAfterInversion,
-      string                              &errorMessage)      
+    bool OpenPosition(
+       const ENUM_PB_VIRTUAL_POSITION_STATE newState,
+       const datetime                       entryTime,
+       const double                         entryPrice,
+       const SMaDynamics                   &entryMaDynamics,
+       const SLocalMarketDynamics          &entryLocalDynamics,
+       const bool                           openedAfterInversion,
+       string                              &errorMessage)
      {
       errorMessage="";
 
@@ -594,7 +728,29 @@ string BuildMaDynamicsAverageRow(
       
       m_currentEntryMaDynamics.accelerationCurrent=
          entryMaDynamics.accelerationCurrent;
-         
+     
+     // --------------------------------------------------
+// Photographie de la dynamique locale M5.
+// --------------------------------------------------
+m_currentEntryLocalDynamics.isValid=
+   entryLocalDynamics.isValid;
+
+m_currentEntryLocalDynamics.directionalChangePoints=
+   entryLocalDynamics.directionalChangePoints;
+
+m_currentEntryLocalDynamics.rangePoints=
+   entryLocalDynamics.rangePoints;
+
+m_currentEntryLocalDynamics.directionalSlopePointsPerHour=
+   entryLocalDynamics.directionalSlopePointsPerHour;
+
+m_currentEntryLocalDynamics.directionalCurvaturePointsPerHour2=
+   entryLocalDynamics.directionalCurvaturePointsPerHour2;
+
+m_currentEntryLocalDynamics.quadraticRSquared=
+   entryLocalDynamics.quadraticRSquared;
+
+
       m_currentPositionOpenedAfterInversion=
          openedAfterInversion;
 
@@ -1089,8 +1245,8 @@ void RecordInversionTradePerformance(
    const ENUM_PB_VIRTUAL_POSITION_STATE positionState,
    const double                         resultPoints,
    const double                         resultMoney,
-   const SMaDynamics                   &entryMaDynamics)
-     
+   const SMaDynamics                   &entryMaDynamics,
+   const SLocalMarketDynamics          &entryLocalDynamics)     
   {
    m_inversionTradeClosedCount++;
 
@@ -1108,6 +1264,13 @@ void RecordInversionTradePerformance(
       AddMaDynamics(
          m_inversionEntryWinningDynamicsSum,
          entryMaDynamics);
+
+         if(AddLocalMarketDynamics(
+              m_inversionEntryWinningLocalDynamicsSum,
+              entryLocalDynamics))
+          {
+           m_inversionEntryWinningLocalDynamicsCount++;
+          }
      }
    else if(resultPoints<0.0)
      {
@@ -1118,7 +1281,15 @@ void RecordInversionTradePerformance(
       
       AddMaDynamics(
          m_inversionEntryLosingDynamicsSum,
-         entryMaDynamics);      
+         entryMaDynamics);   
+         
+        if(AddLocalMarketDynamics(
+              m_inversionEntryLosingLocalDynamicsSum,
+              entryLocalDynamics))
+          {
+           m_inversionEntryLosingLocalDynamicsCount++;
+          }
+
      }
    else
      {
@@ -1145,7 +1316,8 @@ void RecordFlatEntryTradePerformance(
    const ENUM_PB_VIRTUAL_POSITION_STATE positionState,
    const double                         resultPoints,
    const double                         resultMoney,
-   const SMaDynamics &entryMaDynamics)   
+   const SMaDynamics &entryMaDynamics,
+   const SLocalMarketDynamics          &entryLocalDynamics)   
   {
    m_flatEntryTradeClosedCount++;
 
@@ -1166,7 +1338,13 @@ void RecordFlatEntryTradePerformance(
       AddMaDynamics(
          m_flatEntryWinningDynamicsSum,
          entryMaDynamics);
-     }
+        if(AddLocalMarketDynamics(
+          m_flatEntryWinningLocalDynamicsSum,
+          entryLocalDynamics))
+          {
+           m_flatEntryWinningLocalDynamicsCount++;
+          }
+         }
    else if(resultPoints<0.0)
      {
       m_flatEntryTradeLosingCount++;
@@ -1177,7 +1355,14 @@ void RecordFlatEntryTradePerformance(
       
       AddMaDynamics(
          m_flatEntryLosingDynamicsSum,
-         entryMaDynamics);   
+         entryMaDynamics); 
+         
+         if(AddLocalMarketDynamics(
+              m_flatEntryLosingLocalDynamicsSum,
+              entryLocalDynamics))
+          {
+           m_flatEntryLosingLocalDynamicsCount++;
+          }
       }
    else
      {
@@ -1442,25 +1627,30 @@ void RecordFlatEntryTradePerformance(
       SMaDynamics closedEntryMaDynamics=
          m_currentEntryMaDynamics;
    
+   SLocalMarketDynamics closedEntryLocalDynamics=
+   m_currentEntryLocalDynamics;
+
       RecordClosedTrade(
          exitTime,
          closedState,
          resultPoints,
          resultMoney);
       
-      if(wasOpenedAfterInversion)
-         RecordInversionTradePerformance(
+    if(wasOpenedAfterInversion)
+        RecordInversionTradePerformance(
             closedState,
             resultPoints,
             resultMoney,
-            closedEntryMaDynamics);
-      else
-         RecordFlatEntryTradePerformance(
+            closedEntryMaDynamics,
+            closedEntryLocalDynamics);
+    else
+        RecordFlatEntryTradePerformance(
             closedState,
             resultPoints,
             resultMoney,
-            closedEntryMaDynamics);
-                  
+            closedEntryMaDynamics,
+            closedEntryLocalDynamics);
+      
       m_lastKnownTime=exitTime;
 
       m_state      =PB_VIRTUAL_POSITION_FLAT;
@@ -1470,6 +1660,17 @@ void RecordFlatEntryTradePerformance(
       m_currentEntryMaSlopePoints=0.0;
       
       m_currentEntryMaDynamics.slopeEarlier=0.0;
+
+m_currentEntryLocalDynamics.isValid=false;
+
+m_currentEntryLocalDynamics.directionalChangePoints=0.0;
+m_currentEntryLocalDynamics.rangePoints=0.0;
+
+m_currentEntryLocalDynamics.directionalSlopePointsPerHour=0.0;
+m_currentEntryLocalDynamics.directionalCurvaturePointsPerHour2=0.0;
+
+m_currentEntryLocalDynamics.quadraticRSquared=0.0;      
+      
       m_currentEntryMaDynamics.slopePrevious=0.0;
       m_currentEntryMaDynamics.slopeCurrent=0.0;
       
@@ -1518,6 +1719,58 @@ public:
      }
 
 
+   // --------------------------------------------------
+// Dynamique locale - FLAT gagnants.
+// --------------------------------------------------
+string BuildFlatWinningLocalDynamicsSummary(void) const
+  {
+   return BuildLocalDynamicsAverageRow(
+      "Dynamique locale FLAT GAGNANTS",
+      m_flatEntryTradeWinningCount,
+      m_flatEntryWinningLocalDynamicsCount,
+      m_flatEntryWinningLocalDynamicsSum);
+  }
+
+
+// --------------------------------------------------
+// Dynamique locale - FLAT perdants.
+// --------------------------------------------------
+string BuildFlatLosingLocalDynamicsSummary(void) const
+  {
+   return BuildLocalDynamicsAverageRow(
+      "Dynamique locale FLAT PERDANTS",
+      m_flatEntryTradeLosingCount,
+      m_flatEntryLosingLocalDynamicsCount,
+      m_flatEntryLosingLocalDynamicsSum);
+  }
+
+
+// --------------------------------------------------
+// Dynamique locale - POST-INVERSION gagnants.
+// --------------------------------------------------
+string BuildInversionWinningLocalDynamicsSummary(void) const
+  {
+   return BuildLocalDynamicsAverageRow(
+      "Dynamique locale POST-INVERSION GAGNANTS",
+      m_inversionTradeWinningCount,
+      m_inversionEntryWinningLocalDynamicsCount,
+      m_inversionEntryWinningLocalDynamicsSum);
+  }
+
+
+// --------------------------------------------------
+// Dynamique locale - POST-INVERSION perdants.
+// --------------------------------------------------
+string BuildInversionLosingLocalDynamicsSummary(void) const
+  {
+   return BuildLocalDynamicsAverageRow(
+      "Dynamique locale POST-INVERSION PERDANTS",
+      m_inversionTradeLosingCount,
+      m_inversionEntryLosingLocalDynamicsCount,
+      m_inversionEntryLosingLocalDynamicsSum);
+  }
+
+   
    // --------------------------------------------------
    // Réinitialise l'état et les statistiques.
    // --------------------------------------------------
@@ -1809,6 +2062,34 @@ public:
       
       ResetMaDynamics(
          m_inversionEntryLosingDynamicsSum);
+
+m_currentEntryLocalDynamics.isValid=false;
+
+m_currentEntryLocalDynamics.directionalChangePoints=0.0;
+m_currentEntryLocalDynamics.rangePoints=0.0;
+
+m_currentEntryLocalDynamics.directionalSlopePointsPerHour=0.0;
+m_currentEntryLocalDynamics.directionalCurvaturePointsPerHour2=0.0;
+
+m_currentEntryLocalDynamics.quadraticRSquared=0.0;
+
+ResetLocalMarketDynamics(
+   m_flatEntryWinningLocalDynamicsSum);
+
+ResetLocalMarketDynamics(
+   m_flatEntryLosingLocalDynamicsSum);
+
+ResetLocalMarketDynamics(
+   m_inversionEntryWinningLocalDynamicsSum);
+
+ResetLocalMarketDynamics(
+   m_inversionEntryLosingLocalDynamicsSum);
+
+m_flatEntryWinningLocalDynamicsCount=0;
+m_flatEntryLosingLocalDynamicsCount=0;
+
+m_inversionEntryWinningLocalDynamicsCount=0;
+m_inversionEntryLosingLocalDynamicsCount=0;
 
      }
 
@@ -2261,13 +2542,14 @@ string BuildInversionEntrySlopeSummary(void) const
    // --------------------------------------------------
    // Traite le signal à la nouvelle bougie.
    // --------------------------------------------------
-   bool ProcessSignal(
-      const ENUM_PB_TRADE_SIGNAL signal,
-      const SMaDynamics         &entryMaDynamics,
-      const datetime             executionTime,
-      const double               bid,
-      const double               ask,
-      string                    &eventMessage)
+bool ProcessSignal(
+   const ENUM_PB_TRADE_SIGNAL signal,
+   const SMaDynamics         &entryMaDynamics,
+   const SLocalMarketDynamics &entryLocalDynamics,
+   const datetime             executionTime,
+   const double               bid,
+   const double               ask,
+   string                    &eventMessage)
      {
       eventMessage="";
 
@@ -2326,13 +2608,14 @@ string BuildInversionEntrySlopeSummary(void) const
         {
          string openError;
 
-         if(!OpenPosition(
-               newState,
-               executionTime,
-               newEntryPrice,
-               entryMaDynamics,
-               false,
-               openError))
+if(!OpenPosition(
+      newState,
+      executionTime,
+      newEntryPrice,
+      entryMaDynamics,
+      entryLocalDynamics,
+      false,
+      openError))
            {
             eventMessage=StringFormat(
                "Ouverture virtuelle impossible : %s",
@@ -2428,13 +2711,14 @@ string BuildInversionEntrySlopeSummary(void) const
       // correspondant au signal courant.
       string openError;
 
-      if(!OpenPosition(
-            newState,
-            executionTime,
-            newEntryPrice,
-            entryMaDynamics,
-            true,
-            openError))
+if(!OpenPosition(
+      newState,
+      executionTime,
+      newEntryPrice,
+      entryMaDynamics,
+      entryLocalDynamics,
+      true,
+      openError))
         {
          eventMessage=StringFormat(
             "La position précédente a été fermée, "
@@ -3128,6 +3412,26 @@ if(MathAbs(
 if(MathAbs(
       m_inversionEntryLosingDynamicsSum.slopeCurrent-
       m_inversionEntryLosingSlopeSum)>moneyTolerance)      
+   return false;
+
+// --------------------------------------------------
+// v1.20 - Les observations locales ne peuvent jamais
+// être plus nombreuses que les trades correspondants.
+// --------------------------------------------------
+if(m_flatEntryWinningLocalDynamicsCount>
+   m_flatEntryTradeWinningCount)
+   return false;
+
+if(m_flatEntryLosingLocalDynamicsCount>
+   m_flatEntryTradeLosingCount)
+   return false;
+
+if(m_inversionEntryWinningLocalDynamicsCount>
+   m_inversionTradeWinningCount)
+   return false;
+
+if(m_inversionEntryLosingLocalDynamicsCount>
+   m_inversionTradeLosingCount)
    return false;
 
       return true;

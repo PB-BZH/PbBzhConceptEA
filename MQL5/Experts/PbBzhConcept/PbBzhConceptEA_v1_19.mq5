@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
 //|                                              PbBzhConceptEA.mq5  |
-//|              Version 1.18 - Observateur avec signaux graphiques  |
+//|              Version 1.19 - Observateur avec signaux graphiques  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026, PbBzhConcept"
 #property link      "https://www.mql5.com"
-#property version   "1.18"
+#property version   "1.19"
 #property strict
 #property description "EA pédagogique : signaux et positions virtuelles"
 
@@ -24,7 +24,7 @@ input ENUM_TIMEFRAMES    InpSignalTimeframe  = PERIOD_CURRENT;
 
 //--- Paramètres du signal
 input group "Signal : croisement cours / moyenne mobile"
-input int                InpMaPeriod         = 144;
+input int                InpMaPeriod         = 12;
 input int                InpMaShift          = 0;
 input ENUM_MA_METHOD     InpMaMethod         = MODE_SMA;
 input ENUM_APPLIED_PRICE InpMaAppliedPrice   = PRICE_CLOSE;
@@ -82,7 +82,7 @@ int OnInit(void)
    g_logger.Info(
       StringFormat(
          "DÉMARRAGE | "
-         "Version=1.18 | "
+         "Version=1.19 | "
          "Source=%s | "
          "Compilation=%s | "
          "Mode volume=%s | "

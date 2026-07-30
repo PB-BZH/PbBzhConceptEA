@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
 //|                                              PbBzhConceptEA.mq5  |
-//|              Version 1.18 - Observateur avec signaux graphiques  |
+//|              Version 1.20 - Analyse locale multi-timeframe       |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026, PbBzhConcept"
 #property link      "https://www.mql5.com"
-#property version   "1.18"
+#property version   "1.20"
 #property strict
 #property description "EA pédagogique : signaux et positions virtuelles"
 
@@ -16,15 +16,16 @@
 #include <PbBzhConcept\Simulation\VirtualPositionManager.mqh>
 #include <PbBzhConcept\Simulation\ExecutionQuoteProvider.mqh>
 #include <PbBzhConcept\Simulation\VirtualVolumeCalculator.mqh>
+#include <PbBzhConcept\Analysis\LocalPriceWindowAnalyzer.mqh>
+#include <PbBzhConcept\Domain\LocalMarketDynamics.mqh>
 
 //--- Paramètres généraux
 input group "Général"
 input string             InpExpertName       = "PbBzhConceptEA";
-input ENUM_TIMEFRAMES    InpSignalTimeframe  = PERIOD_CURRENT;
-
+input ENUM_TIMEFRAMES InpSignalTimeframe     = PERIOD_H1;
 //--- Paramètres du signal
 input group "Signal : croisement cours / moyenne mobile"
-input int                InpMaPeriod         = 144;
+input int                InpMaPeriod         = 12;
 input int                InpMaShift          = 0;
 input ENUM_MA_METHOD     InpMaMethod         = MODE_SMA;
 input ENUM_APPLIED_PRICE InpMaAppliedPrice   = PRICE_CLOSE;
@@ -48,10 +49,15 @@ input double InpVirtualRiskPercent=1.00;
 input group "Signal : confirmation de tendance"
 input bool InpUseMaSlopeFilter = true;
 
+input group "Analyse locale multi-timeframe"
+input ENUM_TIMEFRAMES InpLocalTimeframe= PERIOD_M5;
+input int InpLocalWindowMinutes= 60;
+
 //--- Objets principaux
 CEaLogger                 g_logger;
 CBarClock                 g_barClock;
 CMaPriceCrossSignal       g_signal;
+CLocalPriceWindowAnalyzer g_localPriceAnalyzer;
 CChartSignalRenderer      g_renderer;
 CSignalStatistics         g_statistics;
 CVirtualPositionManager   g_virtualPositions;
@@ -82,7 +88,7 @@ int OnInit(void)
    g_logger.Info(
       StringFormat(
          "DÉMARRAGE | "
-         "Version=1.18 | "
+         "Version=1.20 | "
          "Source=%s | "
          "Compilation=%s | "
          "Mode volume=%s | "
@@ -137,9 +143,23 @@ int OnInit(void)
       return INIT_FAILED;
      }
 
+    // ==================================================
+    // 5. Analyse locale multi-timeframe.
+    // ==================================================
+    if(!g_localPriceAnalyzer.Init(
+          _Symbol,
+          InpLocalTimeframe,
+          InpLocalWindowMinutes))
+      {
+       g_logger.Error(
+          "Initialisation de l'analyse locale impossible.");
+
+       return INIT_FAILED;
+      }
+
 
    // ==================================================
-   // 5. Affichage graphique.
+   // 6. Affichage graphique.
    // ==================================================
    if(!g_renderer.Init(
          ChartID(),
@@ -159,7 +179,7 @@ int OnInit(void)
 
 
    // ==================================================
-   // 6. Fournisseur de cotations.
+   // 7. Fournisseur de cotations.
    // ==================================================
    if(!g_quoteProvider.Init(_Symbol))
      {
@@ -171,7 +191,7 @@ int OnInit(void)
 
 
    // ==================================================
-   // 7. Gestionnaire de positions virtuelles.
+   // 8. Gestionnaire de positions virtuelles.
    // ==================================================
    string virtualPositionInitError;
 
@@ -195,7 +215,7 @@ int OnInit(void)
 
 
    // ==================================================
-   // 8. Fin de l'initialisation.
+   // 9. Fin de l'initialisation.
    // ==================================================
    g_logger.Warning(
       "Cette version simule des positions en mémoire "
@@ -256,6 +276,10 @@ void OnDeinit(const int reason)
    g_logger.Info(g_virtualPositions.BuildFlatLosingMaDynamicsSummary());
    g_logger.Info(g_virtualPositions.BuildInversionWinningMaDynamicsSummary());
    g_logger.Info(g_virtualPositions.BuildInversionLosingMaDynamicsSummary());
+   g_logger.Info(g_virtualPositions.BuildFlatWinningLocalDynamicsSummary());
+   g_logger.Info(g_virtualPositions.BuildFlatLosingLocalDynamicsSummary());
+   g_logger.Info(g_virtualPositions.BuildInversionWinningLocalDynamicsSummary());
+   g_logger.Info(g_virtualPositions.BuildInversionLosingLocalDynamicsSummary());
    g_signal.Deinit();
    g_logger.Info(StringFormat("Arrêt de l'EA. Motif=%d.",reason));
   }
@@ -416,7 +440,14 @@ void OnTick(void)
    // 6. Traitement du signal à la nouvelle bougie.
    // ==================================================
    string virtualEvent;
-   
+  
+SLocalMarketDynamics localDynamics;
+
+ZeroMemory(localDynamics);
+
+localDynamics.isValid=false;  
+
+
    // --------------------------------------------------
    // Diagnostic temporaire de la pente de MA
    // au moment du signal.
@@ -433,7 +464,7 @@ void OnTick(void)
             "DIAG DYNAMIQUE | Signal=%s | "
             "S2=%.2f | S1=%.2f | S0=%.2f pts | "
             "A1=%.2f | A0=%.2f pts/bougie^2",
-   
+
             signalText,
    
             snapshot.directionalMaDynamics.slopeEarlier,
@@ -441,15 +472,160 @@ void OnTick(void)
             snapshot.directionalMaDynamics.slopeCurrent,
             snapshot.directionalMaDynamics.accelerationPrevious,
             snapshot.directionalMaDynamics.accelerationCurrent));
-     }
+ SLocalPriceWindowSnapshot localWindow;
+
+ datetime localReferenceTime=
+   snapshot.bar1OpenTime+
+   PeriodSeconds(InpSignalTimeframe);
+
+if(g_localPriceAnalyzer.Analyze(
+      localReferenceTime,
+      localWindow))
+      
+   {
+   double direction=
+      snapshot.signal==PB_SIGNAL_BUY
+      ? 1.0
+      : -1.0;
+
+   double directionalChange=
+      localWindow.netChangePoints*
+      direction;
+
+double directionalSlope=
+   localWindow.localSlopePointsPerHour*
+   direction;
+
+double directionalCurvature=
+   localWindow.localCurvaturePointsPerHour2*
+   direction;
+
+localDynamics.isValid=
+   localWindow.isComplete &&
+   localWindow.quadraticFitValid;
+
+localDynamics.directionalChangePoints=
+   directionalChange;
+
+localDynamics.rangePoints=
+   localWindow.rangePoints;
+
+localDynamics.directionalSlopePointsPerHour=
+   directionalSlope;
+
+localDynamics.directionalCurvaturePointsPerHour2=
+   directionalCurvature;
+
+localDynamics.quadraticRSquared=
+   localWindow.quadraticRSquared;
+
+      if(!localDynamics.isValid)
+        {
+         g_logger.Warning(
+            StringFormat(
+               "DIAG LOCAL INVALIDE | "
+               "Signal=%s | Heure=%s | "
+               "Barres=%d/%d | Complète=%s | Fit=%s",
+
+               signalText,
+
+               TimeToString(
+                  localReferenceTime,
+                  TIME_DATE|TIME_MINUTES),
+
+               localWindow.barCount,
+               localWindow.expectedBars,
+
+               localWindow.isComplete
+               ? "OUI"
+               : "NON",
+
+               localWindow.quadraticFitValid
+               ? "OUI"
+               : "NON"));
+        }
+
+
+g_logger.Info(
+   StringFormat(
+      "DIAG LOCAL | "
+      "TF=%s | Signal=%s | "
+      "Fenêtre=%s -> %s | "
+      "Barres=%d/%d | "
+      "Complète=%s | "
+      "Variation=%.2f pts | "
+      "Variation dir.=%.2f pts | "
+      "Amplitude=%.2f pts | "
+      "Fit=%s | "
+      "Points fit=%d | "
+      "Pente dir.=%.2f pts/h | "
+      "Courbure dir.=%.2f pts/h^2 | "
+      "R2=%.4f",
+
+      EnumToString(
+         InpLocalTimeframe),
+
+      signalText,
+
+      TimeToString(
+         localWindow.windowStartTime,
+         TIME_DATE|TIME_MINUTES),
+
+      TimeToString(
+         localWindow.referenceTime,
+         TIME_DATE|TIME_MINUTES),
+
+      localWindow.barCount,
+      localWindow.expectedBars,
+
+      localWindow.isComplete
+      ? "OUI"
+      : "NON",
+
+      localWindow.netChangePoints,
+      directionalChange,
+      localWindow.rangePoints,
+
+      localWindow.quadraticFitValid
+      ? "OK"
+      : "NON",
+
+      localWindow.fitPointCount,
+
+      directionalSlope,
+      directionalCurvature,
+
+      localWindow.quadraticRSquared));
+    }
+else
+  {
+   g_logger.Warning(
+      StringFormat(
+         "DIAG LOCAL ECHEC | "
+         "Signal=%s | Heure=%s | "
+         "TF=%s | Fenêtre=%d min",
+
+         signalText,
+
+         TimeToString(
+            snapshot.bar0OpenTime,
+            TIME_DATE|TIME_MINUTES),
+
+         EnumToString(
+            InpLocalTimeframe),
+
+         InpLocalWindowMinutes));
+  } 
+ }
        
-   if(!g_virtualPositions.ProcessSignal(
-         snapshot.signal,
-         snapshot.directionalMaDynamics,
-         executionQuote.time,
-         executionQuote.bid,
-         executionQuote.ask,
-         virtualEvent))         
+if(!g_virtualPositions.ProcessSignal(
+      snapshot.signal,
+      snapshot.directionalMaDynamics,
+      localDynamics,
+      executionQuote.time,
+      executionQuote.bid,
+      executionQuote.ask,
+      virtualEvent))
      {
       g_logger.Error(
          StringFormat(
