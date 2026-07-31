@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
 //|                                              PbBzhConceptEA.mq5  |
-//|              Version 1.20 - Analyse locale multi-timeframe       |
+//|              Version 1.21 - Analyse locale multi-timeframe       |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026, PbBzhConcept"
 #property link      "https://www.mql5.com"
-#property version   "1.20"
+#property version   "1.21"
 #property strict
 #property description "EA pédagogique : signaux et positions virtuelles"
 
@@ -87,7 +87,7 @@ int OnInit(void) {
   g_logger.Info(
     StringFormat(
       "DÉMARRAGE | "
-      "Version=1.20 | "
+      "Version=1.21 | "
       "Source=%s | "
       "Compilation=%s | "
       "Mode volume=%s | "
@@ -243,17 +243,26 @@ void OnDeinit(const int reason) {
 
   g_logger.Info(StringFormat("Résumé MA=%d : %s", InpMaPeriod, g_statistics.BuildSummary()));
   LogVirtualPositionSummary();
-  g_logger.Info(g_virtualPositions.BuildDrawdownTimingSummary());
+  g_logger.Info("---------------------------------------------");
   g_logger.Info(g_virtualPositions.BuildLongSummary());
   g_logger.Info(g_virtualPositions.BuildShortSummary());
+  g_logger.Info(g_virtualPositions.BuildInversionTradeSummary());
+  g_logger.Info(g_virtualPositions.BuildFlatEntryTradeSummary());
+  g_logger.Info("---------------------------------------------");
+  g_logger.Info(g_virtualPositions.BuildInversionDirectionSummary());
+  g_logger.Info(g_virtualPositions.BuildFlatEntryDirectionSummary());
+  g_logger.Info("---------------------------------------------");
+  g_logger.Info(g_virtualPositions.BuildFlatWinningMaDynamicsSummary());
+  g_logger.Info(g_virtualPositions.BuildFlatLosingMaDynamicsSummary());
+  g_logger.Info("---------------------------------------------");
+  g_logger.Info(g_virtualPositions.BuildFlatWinningLocalDynamicsSummary());
+  g_logger.Info(g_virtualPositions.BuildFlatLosingLocalDynamicsSummary());
+  g_logger.Info("---------------------------------------------");
+  g_logger.Info(g_virtualPositions.BuildDrawdownTimingSummary());
   g_logger.Info(g_virtualPositions.BuildLongExitMatrixSummary());
   g_logger.Info(g_virtualPositions.BuildShortExitMatrixSummary());
   g_logger.Info(g_virtualPositions.BuildLongSignalDetailSummary());
   g_logger.Info(g_virtualPositions.BuildShortSignalDetailSummary());
-  g_logger.Info(g_virtualPositions.BuildInversionTradeSummary());
-  g_logger.Info(g_virtualPositions.BuildInversionDirectionSummary());
-  g_logger.Info(g_virtualPositions.BuildFlatEntryTradeSummary());
-  g_logger.Info(g_virtualPositions.BuildFlatEntryDirectionSummary());
   g_logger.Info(g_virtualPositions.BuildFlatEntryExitMatrixSummary());
   g_logger.Info(g_virtualPositions.BuildInversionEntryExitMatrixSummary());
   g_logger.Info(g_virtualPositions.BuildSignalExitSummary());
@@ -261,12 +270,8 @@ void OnDeinit(const int reason) {
   g_logger.Info(g_virtualPositions.BuildTakeProfitSummary());
   g_logger.Info(g_virtualPositions.BuildFlatEntrySlopeSummary());
   g_logger.Info(g_virtualPositions.BuildInversionEntrySlopeSummary());
-  g_logger.Info(g_virtualPositions.BuildFlatWinningMaDynamicsSummary());
-  g_logger.Info(g_virtualPositions.BuildFlatLosingMaDynamicsSummary());
   g_logger.Info(g_virtualPositions.BuildInversionWinningMaDynamicsSummary());
   g_logger.Info(g_virtualPositions.BuildInversionLosingMaDynamicsSummary());
-  g_logger.Info(g_virtualPositions.BuildFlatWinningLocalDynamicsSummary());
-  g_logger.Info(g_virtualPositions.BuildFlatLosingLocalDynamicsSummary());
   g_logger.Info(g_virtualPositions.BuildFlatLocalQuadrantSummary());
   g_logger.Info(g_virtualPositions.BuildInversionLocalQuadrantSummary());
   g_logger.Info(g_virtualPositions.BuildInversionMaRegimeLocalQuadrantSummary(PB_MA_REGIME_CONTINUATION));
@@ -450,13 +455,13 @@ void OnTick(void) {
       ? "BUY"
       : "SELL";
 
-ENUM_PB_MA_DYNAMICS_REGIME maRegime =
-  DetermineMaDynamicsRegime(
-    snapshot.directionalMaDynamics);
+    ENUM_PB_MA_DYNAMICS_REGIME maRegime =
+      DetermineMaDynamicsRegime(
+      snapshot.directionalMaDynamics);
 
-string maRegimeText =
-  MaDynamicsRegimeToString(
-    maRegime);
+    string maRegimeText =
+      MaDynamicsRegimeToString(
+      maRegime);
 
     g_logger.Info(
       StringFormat(
@@ -626,6 +631,50 @@ string maRegimeText =
     }
   }
 
+  ENUM_PB_MA_DYNAMICS_REGIME maRegime =
+    DetermineMaDynamicsRegime(
+    snapshot.directionalMaDynamics);
+
+  ENUM_PB_LOCAL_DYNAMICS_QUADRANT localQuadrant =
+    DetermineLocalDynamicsQuadrant(
+    localDynamics);
+
+
+double localTrendStrength = 0.0;
+
+if (localDynamics.isValid &&
+    localDynamics.rangePoints > 0.0) {
+
+  localTrendStrength =
+    localDynamics.directionalSlopePointsPerHour /
+    localDynamics.rangePoints;
+}
+
+double localDirectionalEfficiency = 0.0;
+
+if (localDynamics.isValid &&
+    localDynamics.rangePoints > 0.0) {
+
+  localDirectionalEfficiency =
+    localDynamics.directionalChangePoints /
+    localDynamics.rangePoints;
+}
+
+// Entrée depuis FLAT :
+// tendance H1 établie, dynamique M5 favorable
+// et mouvement local suffisamment énergique.
+bool allowFlatEntry =
+  maRegime == PB_MA_REGIME_CONTINUATION &&
+  localQuadrant == PB_LOCAL_QUADRANT_I &&
+  localTrendStrength >= 1.50 &&
+  localDirectionalEfficiency >= 0.60;
+
+  // Réouverture après une sortie sur signal :
+  // configuration de retournement retenue par l'étude v1.20.
+  bool allowReversalEntry =
+    maRegime == PB_MA_REGIME_REVERSAL_LATE &&
+    localQuadrant == PB_LOCAL_QUADRANT_III;
+
   if (!g_virtualPositions.ProcessSignal(
       snapshot.signal,
       snapshot.directionalMaDynamics,
@@ -633,7 +682,9 @@ string maRegimeText =
       executionQuote.time,
       executionQuote.bid,
       executionQuote.ask,
-      virtualEvent)) {
+      virtualEvent,
+      allowFlatEntry,
+      allowReversalEntry)) {
     g_logger.Error(
       StringFormat(
         "Erreur de simulation : %s",
