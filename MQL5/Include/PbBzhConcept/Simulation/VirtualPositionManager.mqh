@@ -94,6 +94,16 @@ class CVirtualPositionManager {
   int m_breakEvenTradeCount;
 
   // --------------------------------------------------
+  // Maximum Favorable Excursion (MFE) des trades perdants.
+  // --------------------------------------------------
+  double m_maxFavorablePoints;
+
+  int m_losingMfeTradeCount;
+  int m_losingReached50Points;
+  int m_losingReached100Points;
+  int m_losingReached200Points;
+  int m_losingReached300Points;
+  // --------------------------------------------------
   // Statistiques des positions LONG.
   // --------------------------------------------------
   int m_longClosedTradeCount;
@@ -470,6 +480,11 @@ class CVirtualPositionManager {
   int m_inversionReversalLateQuadrantIIILosingTurningTimeCount;
   double m_inversionReversalLateQuadrantIIILosingTurningTimeMinutesSum;
 
+  bool m_breakEvenEnabled;
+int m_breakEvenTriggerPoints;
+bool m_breakEvenActivated;
+
+  // ----------------------------------------------
   bool TryGetLocalTurningTimeBeforeSignalMinutes(
     const SLocalMarketDynamics &dynamics,
     double &minutesBeforeSignal) {
@@ -768,6 +783,7 @@ class CVirtualPositionManager {
     double stopLossPrice = 0.0;
     double takeProfitPrice = 0.0;
     ENUM_ORDER_TYPE orderType;
+    m_maxFavorablePoints = 0.0;
 
     if (newState == PB_VIRTUAL_POSITION_LONG) {
       orderType = ORDER_TYPE_BUY;
@@ -893,6 +909,8 @@ class CVirtualPositionManager {
     m_lastTargetRiskMoney = targetRiskMoney;
     m_lastEstimatedLossAtStop = estimatedStopLoss;
     m_lastOpenedVolumeLots = volumeLots;
+
+    m_breakEvenActivated = false;
 
     m_openCount++;
 
@@ -1710,6 +1728,32 @@ class CVirtualPositionManager {
 
 
   // --------------------------------------------------
+  // Enregistre le MFE d'un trade qui termine en perte.
+  // Les seuils sont cumulatifs.
+  // --------------------------------------------------
+  void RecordLosingTradeMfe(
+    const double resultPoints) {
+
+    if (resultPoints >= 0.0)
+      return;
+
+    m_losingMfeTradeCount++;
+
+    if (m_maxFavorablePoints >= 50.0)
+      m_losingReached50Points++;
+
+    if (m_maxFavorablePoints >= 100.0)
+      m_losingReached100Points++;
+
+    if (m_maxFavorablePoints >= 200.0)
+      m_losingReached200Points++;
+
+    if (m_maxFavorablePoints >= 300.0)
+      m_losingReached300Points++;
+  }
+
+
+  // --------------------------------------------------
   // Ferme la position virtuelle actuelle.
   // --------------------------------------------------
   bool CloseCurrentPosition(
@@ -1792,6 +1836,9 @@ class CVirtualPositionManager {
       resultPoints,
       resultMoney);
 
+    RecordLosingTradeMfe(
+      resultPoints);
+
     if (wasOpenedAfterInversion)
     RecordInversionTradePerformance(
       closedState,
@@ -1834,6 +1881,8 @@ class CVirtualPositionManager {
     m_currentEntryMaDynamics.accelerationCurrent = 0.0;
 
     m_currentPositionOpenedAfterInversion = false;
+    m_breakEvenActivated = false;
+    m_maxFavorablePoints = 0.0;
 
     m_stopLossPrice = 0.0;
     m_takeProfitPrice = 0.0;
@@ -1869,6 +1918,12 @@ class CVirtualPositionManager {
     m_lastTargetRiskMoney = 0.0;
     m_lastEstimatedLossAtStop = 0.0;
     m_lastOpenedVolumeLots = 0.0;
+
+    m_breakEvenEnabled = false;
+    m_breakEvenTriggerPoints = 0;
+    m_breakEvenActivated = false;
+
+    m_maxFavorablePoints = 0.0;
 
     Reset();
   }
@@ -2234,6 +2289,14 @@ string BuildInversionReversalLateQuadrantIIILosingTurningTimeSummary(void) const
     m_winningTradeCount = 0;
     m_losingTradeCount = 0;
     m_breakEvenTradeCount = 0;
+
+    m_maxFavorablePoints = 0.0;
+
+    m_losingMfeTradeCount = 0;
+    m_losingReached50Points = 0;
+    m_losingReached100Points = 0;
+    m_losingReached200Points = 0;
+    m_losingReached300Points = 0;
 
     // Statistiques LONG.
     m_longClosedTradeCount = 0;
@@ -2824,6 +2887,18 @@ string BuildInversionReversalLateQuadrantIIILosingTurningTimeSummary(void) const
       losingAverageSlope);
   }
 
+  void ConfigureBreakEven(
+  const bool enabled,
+  const int triggerPoints) {
+
+  m_breakEvenEnabled = enabled;
+
+  m_breakEvenTriggerPoints =
+    (triggerPoints < 0)
+    ? 0
+    : triggerPoints;
+}
+
   // --------------------------------------------------
   // Surveille SL et TP à chaque tick.
   // --------------------------------------------------
@@ -2889,9 +2964,26 @@ string BuildInversionReversalLateQuadrantIIILosingTurningTimeSummary(void) const
       return false;
     }
 
-
     if (m_state == PB_VIRTUAL_POSITION_FLAT)
-    return true;
+      return true;
+
+    // --------------------------------------------------
+    // Maximum Favorable Excursion (MFE) de la position
+    // courante, calculé sur le prix réel de sortie.
+    // --------------------------------------------------
+    double favorablePoints = 0.0;
+
+    if (m_state == PB_VIRTUAL_POSITION_LONG) {
+      favorablePoints =
+        (bid - m_entryPrice) / m_point;
+    } else {
+      favorablePoints =
+        (m_entryPrice - ask) / m_point;
+    }
+
+    if (favorablePoints > m_maxFavorablePoints)
+      m_maxFavorablePoints = favorablePoints;
+
 
     bool stopLossHit = false;
     bool takeProfitHit = false;
@@ -2924,9 +3016,59 @@ string BuildInversionReversalLateQuadrantIIILosingTurningTimeSummary(void) const
       }
     }
 
-    if (!stopLossHit && !takeProfitHit)
-    return true;
+if (!stopLossHit && !takeProfitHit) {
 
+  // --------------------------------------------------
+  // Break-even virtuel.
+  // Lorsque le prix a progressé d'au moins le seuil
+  // demandé, le SL est déplacé au prix d'entrée.
+  // --------------------------------------------------
+  if (m_breakEvenEnabled &&
+      !m_breakEvenActivated &&
+      m_breakEvenTriggerPoints > 0) {
+
+    if (favorablePoints >=
+        (double)m_breakEvenTriggerPoints) {
+
+      double previousStopLossPrice =
+        m_stopLossPrice;
+
+      m_stopLossPrice =
+        NormalizeDouble(
+          m_entryPrice,
+          m_digits);
+
+      m_breakEvenActivated = true;
+
+      eventMessage = StringFormat(
+        "BREAK-EVEN VIRTUEL ACTIVÉ | "
+        "Position=%s | "
+        "Entrée=%.*f | "
+        "Ancien SL=%.*f | "
+        "Nouveau SL=%.*f | "
+        "Progression=%.1f points | "
+        "Seuil=%d points",
+
+        VirtualPositionStateToString(
+          m_state),
+
+        m_digits,
+        m_entryPrice,
+
+        m_digits,
+        previousStopLossPrice,
+
+        m_digits,
+        m_stopLossPrice,
+
+        favorablePoints,
+
+        m_breakEvenTriggerPoints);
+    }
+  }
+
+  return true;
+}
     ENUM_PB_VIRTUAL_POSITION_STATE previousState =
       m_state;
 
@@ -2976,7 +3118,6 @@ string BuildInversionReversalLateQuadrantIIILosingTurningTimeSummary(void) const
 
       exitReason = "TAKE PROFIT";
     }
-
     eventMessage = StringFormat(
       "SORTIE VIRTUELLE %s | "
       "Position=%s | "
@@ -4506,6 +4647,23 @@ if (!allowReversalEntry) {
       profitFactor,
       expectancy);
   }
+
+  string BuildLosingTradeMfeSummary(void) const {
+
+    if (m_losingMfeTradeCount <= 0)
+      return "MFE trades perdants : aucune observation.";
+
+    return StringFormat(
+      "MFE trades perdants : Total=%d | "
+      ">=50 pts=%d | >=100 pts=%d | "
+      ">=200 pts=%d | >=300 pts=%d",
+      m_losingMfeTradeCount,
+      m_losingReached50Points,
+      m_losingReached100Points,
+      m_losingReached200Points,
+      m_losingReached300Points);
+  }
+
 
   string BuildLongSummary(void) const {
     double profitFactor = 0.0;
