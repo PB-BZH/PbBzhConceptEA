@@ -12,8 +12,8 @@
 // --------------------------------------------------
 enum ENUM_PB_VIRTUAL_POSITION_STATE {
   PB_VIRTUAL_POSITION_FLAT = 0,
-    PB_VIRTUAL_POSITION_LONG = 1,
-    PB_VIRTUAL_POSITION_SHORT = -1
+  PB_VIRTUAL_POSITION_LONG = 1,
+  PB_VIRTUAL_POSITION_SHORT = -1
 };
 
 
@@ -480,9 +480,23 @@ class CVirtualPositionManager {
   int m_inversionReversalLateQuadrantIIILosingTurningTimeCount;
   double m_inversionReversalLateQuadrantIIILosingTurningTimeMinutesSum;
 
+  // --------------------------------------------------
+  // Break-even virtuel.
+  // --------------------------------------------------
   bool m_breakEvenEnabled;
-int m_breakEvenTriggerPoints;
-bool m_breakEvenActivated;
+  int m_breakEvenTriggerPoints;
+  bool m_breakEvenActivated;
+
+  // --------------------------------------------------
+  // Verrouillage d'une partie du gain latent.
+  // Exemple :
+  // déclenchement à +300 points,
+  // déplacement du SL à +100 points.
+  // --------------------------------------------------
+  bool m_profitLockEnabled;
+  int m_profitLockTriggerPoints;
+  int m_profitLockPoints;
+  bool m_profitLockActivated;
 
   // ----------------------------------------------
   bool TryGetLocalTurningTimeBeforeSignalMinutes(
@@ -911,6 +925,7 @@ bool m_breakEvenActivated;
     m_lastOpenedVolumeLots = volumeLots;
 
     m_breakEvenActivated = false;
+    m_profitLockActivated = false;
 
     m_openCount++;
 
@@ -1882,6 +1897,7 @@ bool m_breakEvenActivated;
 
     m_currentPositionOpenedAfterInversion = false;
     m_breakEvenActivated = false;
+    m_profitLockActivated = false;
     m_maxFavorablePoints = 0.0;
 
     m_stopLossPrice = 0.0;
@@ -1923,8 +1939,12 @@ bool m_breakEvenActivated;
     m_breakEvenTriggerPoints = 0;
     m_breakEvenActivated = false;
 
-    m_maxFavorablePoints = 0.0;
+    m_profitLockEnabled = false;
+    m_profitLockTriggerPoints = 0;
+    m_profitLockPoints = 0;
+    m_profitLockActivated = false;
 
+    m_maxFavorablePoints = 0.0;
     Reset();
   }
 
@@ -2272,7 +2292,13 @@ string BuildInversionReversalLateQuadrantIIILosingTurningTimeSummary(void) const
     m_stopLossPrice = 0.0;
     m_takeProfitPrice = 0.0;
 
+    // État propre de la position courante.
+    // La configuration reste conservée.
+    m_breakEvenActivated = false;
+    m_profitLockActivated = false;
+
     m_lastKnownTime = 0;
+    
     m_lastKnownBid = 0.0;
     m_lastKnownAsk = 0.0;
 
@@ -2887,17 +2913,55 @@ string BuildInversionReversalLateQuadrantIIILosingTurningTimeSummary(void) const
       losingAverageSlope);
   }
 
+  // --------------------------------------------------
+  // Configure le déplacement du SL au prix d'entrée.
+  // --------------------------------------------------
   void ConfigureBreakEven(
-  const bool enabled,
-  const int triggerPoints) {
+    const bool enabled,
+    const int triggerPoints) {
 
-  m_breakEvenEnabled = enabled;
+    m_breakEvenEnabled = enabled;
 
-  m_breakEvenTriggerPoints =
-    (triggerPoints < 0)
-    ? 0
-    : triggerPoints;
-}
+    m_breakEvenTriggerPoints =
+      (triggerPoints < 0)
+      ? 0
+      : triggerPoints;
+  }
+
+
+  // --------------------------------------------------
+  // Configure le verrouillage d'une partie du gain.
+  //
+  // Exemple :
+  // triggerPoints = 300
+  // lockedPoints  = 100
+  //
+  // À partir de +300 points, le SL est déplacé
+  // à +100 points par rapport au prix d'entrée.
+  // --------------------------------------------------
+  void ConfigureProfitLock(
+    const bool enabled,
+    const int triggerPoints,
+    const int lockedPoints) {
+
+    m_profitLockTriggerPoints =
+      (triggerPoints < 0)
+      ? 0
+      : triggerPoints;
+
+    m_profitLockPoints =
+      (lockedPoints < 0)
+      ? 0
+      : lockedPoints;
+
+    // La protection n'est valide que si le gain
+    // verrouillé reste inférieur au seuil déclencheur.
+    m_profitLockEnabled =
+      enabled &&
+      m_profitLockTriggerPoints > 0 &&
+      m_profitLockPoints <
+        m_profitLockTriggerPoints;
+  }
 
   // --------------------------------------------------
   // Surveille SL et TP à chaque tick.
@@ -3016,59 +3080,161 @@ string BuildInversionReversalLateQuadrantIIILosingTurningTimeSummary(void) const
       }
     }
 
-if (!stopLossHit && !takeProfitHit) {
+    if (!stopLossHit && !takeProfitHit) {
 
-  // --------------------------------------------------
-  // Break-even virtuel.
-  // Lorsque le prix a progressé d'au moins le seuil
-  // demandé, le SL est déplacé au prix d'entrée.
-  // --------------------------------------------------
-  if (m_breakEvenEnabled &&
-      !m_breakEvenActivated &&
-      m_breakEvenTriggerPoints > 0) {
+      // ------------------------------------------------
+      // Deuxième niveau : verrouillage d'un gain.
+      //
+      // Cette protection est contrôlée avant le
+      // break-even. Ainsi, si un tick franchit
+      // directement le seuil de +300 points, le SL
+      // est immédiatement déplacé à +100 points.
+      // ------------------------------------------------
+      if (m_profitLockEnabled &&
+          !m_profitLockActivated &&
+          m_profitLockTriggerPoints > 0 &&
+          m_profitLockPoints >= 0 &&
+          m_profitLockPoints <
+            m_profitLockTriggerPoints &&
+          m_stopLossPrice > 0.0 &&
+          favorablePoints >=
+            (double)m_profitLockTriggerPoints) {
 
-    if (favorablePoints >=
-        (double)m_breakEvenTriggerPoints) {
+        double previousStopLossPrice =
+          m_stopLossPrice;
 
-      double previousStopLossPrice =
-        m_stopLossPrice;
+        double newStopLossPrice = 0.0;
 
-      m_stopLossPrice =
-        NormalizeDouble(
+        if (m_state ==
+            PB_VIRTUAL_POSITION_LONG) {
+
+          newStopLossPrice =
+            m_entryPrice +
+            m_profitLockPoints * m_point;
+        } else {
+
+          newStopLossPrice =
+            m_entryPrice -
+            m_profitLockPoints * m_point;
+        }
+
+        newStopLossPrice =
+          NormalizeDouble(
+            newStopLossPrice,
+            m_digits);
+
+        // Le SL ne doit jamais être déplacé
+        // dans un sens moins favorable.
+        bool improvesStopLoss = false;
+
+        if (m_state ==
+            PB_VIRTUAL_POSITION_LONG) {
+
+          improvesStopLoss =
+            newStopLossPrice >
+            m_stopLossPrice;
+        } else {
+
+          improvesStopLoss =
+            newStopLossPrice <
+            m_stopLossPrice;
+        }
+
+        if (improvesStopLoss) {
+
+          m_stopLossPrice =
+            newStopLossPrice;
+
+          m_profitLockActivated = true;
+
+          // Le niveau de protection est désormais
+          // supérieur au simple break-even.
+          m_breakEvenActivated = true;
+
+          eventMessage = StringFormat(
+            "VERROUILLAGE DE GAIN VIRTUEL ACTIVÉ | "
+            "Position=%s | "
+            "Entrée=%.*f | "
+            "Ancien SL=%.*f | "
+            "Nouveau SL=%.*f | "
+            "Progression=%.1f points | "
+            "Seuil=%d points | "
+            "Gain protégé=%d points",
+
+            VirtualPositionStateToString(
+              m_state),
+
+            m_digits,
+            m_entryPrice,
+
+            m_digits,
+            previousStopLossPrice,
+
+            m_digits,
+            m_stopLossPrice,
+
+            favorablePoints,
+
+            m_profitLockTriggerPoints,
+            m_profitLockPoints);
+
+          return true;
+        }
+      }
+
+
+      // ------------------------------------------------
+      // Premier niveau : break-even virtuel.
+      //
+      // Lorsque le prix a progressé d'au moins le seuil
+      // demandé, le SL est déplacé au prix d'entrée.
+      // ------------------------------------------------
+      if (m_breakEvenEnabled &&
+          !m_breakEvenActivated &&
+          m_breakEvenTriggerPoints > 0 &&
+          m_stopLossPrice > 0.0 &&
+          favorablePoints >=
+            (double)m_breakEvenTriggerPoints) {
+
+        double previousStopLossPrice =
+          m_stopLossPrice;
+
+        m_stopLossPrice =
+          NormalizeDouble(
+            m_entryPrice,
+            m_digits);
+
+        m_breakEvenActivated = true;
+
+        eventMessage = StringFormat(
+          "BREAK-EVEN VIRTUEL ACTIVÉ | "
+          "Position=%s | "
+          "Entrée=%.*f | "
+          "Ancien SL=%.*f | "
+          "Nouveau SL=%.*f | "
+          "Progression=%.1f points | "
+          "Seuil=%d points",
+
+          VirtualPositionStateToString(
+            m_state),
+
+          m_digits,
           m_entryPrice,
-          m_digits);
 
-      m_breakEvenActivated = true;
+          m_digits,
+          previousStopLossPrice,
 
-      eventMessage = StringFormat(
-        "BREAK-EVEN VIRTUEL ACTIVÉ | "
-        "Position=%s | "
-        "Entrée=%.*f | "
-        "Ancien SL=%.*f | "
-        "Nouveau SL=%.*f | "
-        "Progression=%.1f points | "
-        "Seuil=%d points",
+          m_digits,
+          m_stopLossPrice,
 
-        VirtualPositionStateToString(
-          m_state),
+          favorablePoints,
 
-        m_digits,
-        m_entryPrice,
+          m_breakEvenTriggerPoints);
+      }
 
-        m_digits,
-        previousStopLossPrice,
-
-        m_digits,
-        m_stopLossPrice,
-
-        favorablePoints,
-
-        m_breakEvenTriggerPoints);
+      return true;
     }
-  }
-
-  return true;
-}
+    
     ENUM_PB_VIRTUAL_POSITION_STATE previousState =
       m_state;
 

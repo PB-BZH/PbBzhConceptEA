@@ -114,10 +114,10 @@ int OnInit(void) {
   // 3. Horloge de bougies.
   // ==================================================
   if (!g_barClock.Init(
-      _Symbol,
-      g_timeframe)) {
-    g_logger.Error(
-      "Initialisation de l'horloge de bougies impossible.");
+    _Symbol,
+    g_timeframe)) {
+        g_logger.Error(
+        "Initialisation de l'horloge de bougies impossible.");
 
     return INIT_FAILED;
   }
@@ -450,13 +450,13 @@ void OnTick(void) {
       ? "BUY"
       : "SELL";
 
-ENUM_PB_MA_DYNAMICS_REGIME maRegime =
-  DetermineMaDynamicsRegime(
-    snapshot.directionalMaDynamics);
+    ENUM_PB_MA_DYNAMICS_REGIME maRegime =
+      DetermineMaDynamicsRegime(
+      snapshot.directionalMaDynamics);
 
-string maRegimeText =
-  MaDynamicsRegimeToString(
-    maRegime);
+    string maRegimeText =
+      MaDynamicsRegimeToString(
+      maRegime);
 
     g_logger.Info(
       StringFormat(

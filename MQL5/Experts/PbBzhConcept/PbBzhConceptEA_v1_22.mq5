@@ -61,6 +61,11 @@ input group "Simulation : break-even virtuel"
 input bool InpUseVirtualBreakEven = true;
 input int InpVirtualBreakEvenTriggerPoints = 200;
 
+input group "Simulation : verrouillage de gain virtuel"
+input bool InpUseVirtualProfitLock = true;
+input int InpVirtualProfitLockTriggerPoints = 300;
+input int InpVirtualProfitLockPoints = 100;
+
 //--- Objets principaux
 CEaLogger g_logger;
 CBarClock g_barClock;
@@ -238,7 +243,12 @@ int OnInit(void) {
   g_virtualPositions.ConfigureBreakEven(
     InpUseVirtualBreakEven,
     InpVirtualBreakEvenTriggerPoints);
-
+    
+  g_virtualPositions.ConfigureProfitLock(
+    InpUseVirtualProfitLock,
+    InpVirtualProfitLockTriggerPoints,
+    InpVirtualProfitLockPoints);
+    
   // ==================================================
   // 9. Fin de l'initialisation.
   // ==================================================
