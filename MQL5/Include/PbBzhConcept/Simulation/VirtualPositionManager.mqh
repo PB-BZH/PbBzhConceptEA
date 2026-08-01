@@ -103,6 +103,31 @@ class CVirtualPositionManager {
   int m_losingReached100Points;
   int m_losingReached200Points;
   int m_losingReached300Points;
+
+  // --------------------------------------------------
+  // Volatilité ATR H1 observée à l'ouverture.
+  // Les valeurs de la position courante sont figées
+  // jusqu'à sa clôture, puis classées selon le résultat.
+  // --------------------------------------------------
+  bool m_currentEntryAtrValid;
+  double m_currentEntryAtrPoints;
+  double m_currentEntryStopLossAtr;
+
+  int m_entryAtrValidTradeCount;
+  int m_entryAtrUnavailableTradeCount;
+
+  int m_entryAtrWinningTradeCount;
+  int m_entryAtrLosingTradeCount;
+  int m_entryAtrBreakEvenTradeCount;
+
+  double m_entryAtrWinningPointsSum;
+  double m_entryAtrLosingPointsSum;
+  double m_entryAtrBreakEvenPointsSum;
+
+  double m_entryStopLossAtrWinningSum;
+  double m_entryStopLossAtrLosingSum;
+  double m_entryStopLossAtrBreakEvenSum;
+
   // --------------------------------------------------
   // Statistiques des positions LONG.
   // --------------------------------------------------
@@ -763,6 +788,8 @@ class CVirtualPositionManager {
     const SMaDynamics &entryMaDynamics,
     const SLocalMarketDynamics &entryLocalDynamics,
     const bool openedAfterInversion,
+    const bool entryAtrValid,
+    const double entryAtrPoints,
     string &errorMessage) {
     errorMessage = "";
 
@@ -909,6 +936,29 @@ class CVirtualPositionManager {
 
     m_currentEntryLocalDynamics.quadraticRSquared =
       entryLocalDynamics.quadraticRSquared;
+
+
+    // --------------------------------------------------
+    // Photographie de l'ATR à l'ouverture.
+    // --------------------------------------------------
+    m_currentEntryAtrValid =
+      entryAtrValid &&
+      entryAtrPoints > 0.0;
+
+    m_currentEntryAtrPoints =
+      m_currentEntryAtrValid
+      ? entryAtrPoints
+      : 0.0;
+
+    m_currentEntryStopLossAtr = 0.0;
+
+    if (m_currentEntryAtrValid &&
+        m_stopLossPoints > 0) {
+
+      m_currentEntryStopLossAtr =
+        (double)m_stopLossPoints /
+        m_currentEntryAtrPoints;
+    }
 
 
     m_currentPositionOpenedAfterInversion =
@@ -1769,6 +1819,50 @@ class CVirtualPositionManager {
 
 
   // --------------------------------------------------
+  // Enregistre l'ATR observé à l'ouverture du trade
+  // qui vient d'être clôturé.
+  // --------------------------------------------------
+  void RecordEntryAtrPerformance(
+    const double resultPoints) {
+
+    if (!m_currentEntryAtrValid ||
+        m_currentEntryAtrPoints <= 0.0) {
+
+      m_entryAtrUnavailableTradeCount++;
+      return;
+    }
+
+    m_entryAtrValidTradeCount++;
+
+    if (resultPoints > 0.0) {
+      m_entryAtrWinningTradeCount++;
+
+      m_entryAtrWinningPointsSum +=
+        m_currentEntryAtrPoints;
+
+      m_entryStopLossAtrWinningSum +=
+        m_currentEntryStopLossAtr;
+    } else if (resultPoints < 0.0) {
+      m_entryAtrLosingTradeCount++;
+
+      m_entryAtrLosingPointsSum +=
+        m_currentEntryAtrPoints;
+
+      m_entryStopLossAtrLosingSum +=
+        m_currentEntryStopLossAtr;
+    } else {
+      m_entryAtrBreakEvenTradeCount++;
+
+      m_entryAtrBreakEvenPointsSum +=
+        m_currentEntryAtrPoints;
+
+      m_entryStopLossAtrBreakEvenSum +=
+        m_currentEntryStopLossAtr;
+    }
+  }
+
+
+  // --------------------------------------------------
   // Ferme la position virtuelle actuelle.
   // --------------------------------------------------
   bool CloseCurrentPosition(
@@ -1854,6 +1948,9 @@ class CVirtualPositionManager {
     RecordLosingTradeMfe(
       resultPoints);
 
+    RecordEntryAtrPerformance(
+      resultPoints);
+
     if (wasOpenedAfterInversion)
     RecordInversionTradePerformance(
       closedState,
@@ -1900,6 +1997,10 @@ class CVirtualPositionManager {
     m_profitLockActivated = false;
     m_maxFavorablePoints = 0.0;
 
+    m_currentEntryAtrValid = false;
+    m_currentEntryAtrPoints = 0.0;
+    m_currentEntryStopLossAtr = 0.0;
+
     m_stopLossPrice = 0.0;
     m_takeProfitPrice = 0.0;
 
@@ -1945,6 +2046,11 @@ class CVirtualPositionManager {
     m_profitLockActivated = false;
 
     m_maxFavorablePoints = 0.0;
+
+    m_currentEntryAtrValid = false;
+    m_currentEntryAtrPoints = 0.0;
+    m_currentEntryStopLossAtr = 0.0;
+
     Reset();
   }
 
@@ -2323,6 +2429,27 @@ string BuildInversionReversalLateQuadrantIIILosingTurningTimeSummary(void) const
     m_losingReached100Points = 0;
     m_losingReached200Points = 0;
     m_losingReached300Points = 0;
+
+    // Volatilité ATR de la position courante.
+    m_currentEntryAtrValid = false;
+    m_currentEntryAtrPoints = 0.0;
+    m_currentEntryStopLossAtr = 0.0;
+
+    // Statistiques ATR à l'entrée.
+    m_entryAtrValidTradeCount = 0;
+    m_entryAtrUnavailableTradeCount = 0;
+
+    m_entryAtrWinningTradeCount = 0;
+    m_entryAtrLosingTradeCount = 0;
+    m_entryAtrBreakEvenTradeCount = 0;
+
+    m_entryAtrWinningPointsSum = 0.0;
+    m_entryAtrLosingPointsSum = 0.0;
+    m_entryAtrBreakEvenPointsSum = 0.0;
+
+    m_entryStopLossAtrWinningSum = 0.0;
+    m_entryStopLossAtrLosingSum = 0.0;
+    m_entryStopLossAtrBreakEvenSum = 0.0;
 
     // Statistiques LONG.
     m_longClosedTradeCount = 0;
@@ -3345,7 +3472,9 @@ bool ProcessSignal(
   const double ask,
   string &eventMessage,
   const bool allowFlatEntry = true,
-  const bool allowReversalEntry = true) {
+  const bool allowReversalEntry = true,
+  const bool entryAtrValid = false,
+  const double entryAtrPoints = 0.0) {
     eventMessage = "";
 
     if (!m_isInitialized) {
@@ -3423,6 +3552,8 @@ bool ProcessSignal(
           entryMaDynamics,
           entryLocalDynamics,
           false,
+          entryAtrValid,
+          entryAtrPoints,
           openError)) {
         eventMessage = StringFormat(
           "Ouverture virtuelle impossible : %s",
@@ -3565,6 +3696,8 @@ if (!allowReversalEntry) {
         entryMaDynamics,
         entryLocalDynamics,
         true,
+        entryAtrValid,
+        entryAtrPoints,
         openError)) {
       eventMessage = StringFormat(
         "La position précédente a été fermée, "
@@ -3647,6 +3780,19 @@ if (!allowReversalEntry) {
       m_signalExitCount+
       m_stopLossExitCount+
       m_takeProfitExitCount) {
+      return false;
+    }
+
+    if (m_entryAtrValidTradeCount !=
+        m_entryAtrWinningTradeCount+
+        m_entryAtrLosingTradeCount+
+        m_entryAtrBreakEvenTradeCount) {
+      return false;
+    }
+
+    if (m_entryAtrValidTradeCount+
+        m_entryAtrUnavailableTradeCount !=
+        m_closedTradeCount) {
       return false;
     }
 
@@ -4813,6 +4959,77 @@ if (!allowReversalEntry) {
       profitFactor,
       expectancy);
   }
+
+  string BuildEntryAtrSummary(void) const {
+
+    if (m_entryAtrValidTradeCount <= 0) {
+      return StringFormat(
+        "Résumé ATR entrée : aucune observation valide | "
+        "Indisponibles=%d",
+        m_entryAtrUnavailableTradeCount);
+    }
+
+    double winningAtrAverage = 0.0;
+    double losingAtrAverage = 0.0;
+    double breakEvenAtrAverage = 0.0;
+
+    double winningStopLossAtrAverage = 0.0;
+    double losingStopLossAtrAverage = 0.0;
+    double breakEvenStopLossAtrAverage = 0.0;
+
+    if (m_entryAtrWinningTradeCount > 0) {
+      winningAtrAverage =
+        m_entryAtrWinningPointsSum /
+        (double)m_entryAtrWinningTradeCount;
+
+      winningStopLossAtrAverage =
+        m_entryStopLossAtrWinningSum /
+        (double)m_entryAtrWinningTradeCount;
+    }
+
+    if (m_entryAtrLosingTradeCount > 0) {
+      losingAtrAverage =
+        m_entryAtrLosingPointsSum /
+        (double)m_entryAtrLosingTradeCount;
+
+      losingStopLossAtrAverage =
+        m_entryStopLossAtrLosingSum /
+        (double)m_entryAtrLosingTradeCount;
+    }
+
+    if (m_entryAtrBreakEvenTradeCount > 0) {
+      breakEvenAtrAverage =
+        m_entryAtrBreakEvenPointsSum /
+        (double)m_entryAtrBreakEvenTradeCount;
+
+      breakEvenStopLossAtrAverage =
+        m_entryStopLossAtrBreakEvenSum /
+        (double)m_entryAtrBreakEvenTradeCount;
+    }
+
+    return StringFormat(
+      "Résumé ATR entrée : "
+      "Valides=%d | Indisponibles=%d | "
+      "Gagnants=%d ATR moyen=%.1f pts SL moyen=%.2f ATR | "
+      "Perdants=%d ATR moyen=%.1f pts SL moyen=%.2f ATR | "
+      "Neutres=%d ATR moyen=%.1f pts SL moyen=%.2f ATR",
+
+      m_entryAtrValidTradeCount,
+      m_entryAtrUnavailableTradeCount,
+
+      m_entryAtrWinningTradeCount,
+      winningAtrAverage,
+      winningStopLossAtrAverage,
+
+      m_entryAtrLosingTradeCount,
+      losingAtrAverage,
+      losingStopLossAtrAverage,
+
+      m_entryAtrBreakEvenTradeCount,
+      breakEvenAtrAverage,
+      breakEvenStopLossAtrAverage);
+  }
+
 
   string BuildLosingTradeMfeSummary(void) const {
 

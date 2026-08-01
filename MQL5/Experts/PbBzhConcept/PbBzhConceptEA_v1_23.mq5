@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
 //|                                              PbBzhConceptEA.mq5  |
-//|              Version 1.22 - Analyse locale multi-timeframe       |
+//|              v1.23 : observation ATR H1 à l’entrée               |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026, PbBzhConcept"
 #property link      "https://www.mql5.com"
-#property version   "1.22"
+#property version   "1.23"
 #property strict
 #property description "EA pédagogique : signaux et positions virtuelles"
 
@@ -57,6 +57,10 @@ input group "Contexte tendance H4"
 input ENUM_TIMEFRAMES InpTrendTimeframe = PERIOD_H4;
 input int InpTrendMaPeriod = 12;
 
+input group "Volatilité ATR H1 (observation)"
+input ENUM_TIMEFRAMES InpAtrTimeframe = PERIOD_H1;
+input int InpAtrPeriod = 14;
+
 input group "Simulation : break-even virtuel"
 input bool InpUseVirtualBreakEven = true;
 input int InpVirtualBreakEvenTriggerPoints = 200;
@@ -79,6 +83,7 @@ CExecutionQuoteProvider g_quoteProvider;
 ENUM_TIMEFRAMES g_timeframe = PERIOD_CURRENT;
 
 int g_trendMaHandle = INVALID_HANDLE;
+int g_atrHandle = INVALID_HANDLE;
 
 //+------------------------------------------------------------------+
 //| Initialisation                                                    |
@@ -102,7 +107,7 @@ int OnInit(void) {
   g_logger.Info(
     StringFormat(
       "DÉMARRAGE | "
-      "Version=1.22 | "
+      "Version=1.23 | "
       "Source=%s | "
       "Compilation=%s | "
       "Mode volume=%s | "
@@ -187,6 +192,28 @@ int OnInit(void) {
     return INIT_FAILED;
   }
 
+  // ==================================================
+  // 6. ATR de volatilité H1.
+  // ==================================================
+  g_atrHandle = iATR(
+    _Symbol,
+    InpAtrTimeframe,
+    InpAtrPeriod);
+
+  if (g_atrHandle == INVALID_HANDLE) {
+    g_logger.Error(
+      StringFormat(
+        "Impossible de créer l'ATR | "
+        "TF=%s | Période=%d | Erreur=%d",
+
+        EnumToString(
+          InpAtrTimeframe),
+
+        InpAtrPeriod,
+        GetLastError()));
+
+    return INIT_FAILED;
+  }
 
   // ==================================================
   // 6. Affichage graphique.
@@ -243,12 +270,12 @@ int OnInit(void) {
   g_virtualPositions.ConfigureBreakEven(
     InpUseVirtualBreakEven,
     InpVirtualBreakEvenTriggerPoints);
-    
+
   g_virtualPositions.ConfigureProfitLock(
     InpUseVirtualProfitLock,
     InpVirtualProfitLockTriggerPoints,
     InpVirtualProfitLockPoints);
-    
+
   // ==================================================
   // 9. Fin de l'initialisation.
   // ==================================================
@@ -288,7 +315,13 @@ void OnDeinit(const int reason) {
     g_trendMaHandle = INVALID_HANDLE;
   }
 
+  if (g_atrHandle != INVALID_HANDLE) {
+    IndicatorRelease(g_atrHandle);
+    g_atrHandle = INVALID_HANDLE;
+  }
+
   g_logger.Info(StringFormat("Résumé MA=%d : %s", InpMaPeriod, g_statistics.BuildSummary()));
+
   LogVirtualPositionSummary();
   g_logger.Info("---------------------------------------------");
   g_logger.Info(g_virtualPositions.BuildLongSummary());
@@ -306,6 +339,7 @@ void OnDeinit(const int reason) {
   g_logger.Info(g_virtualPositions.BuildFlatLosingLocalDynamicsSummary());
   g_logger.Info("---------------------------------------------");
   g_logger.Info(g_virtualPositions.BuildLosingTradeMfeSummary());
+  g_logger.Info(g_virtualPositions.BuildEntryAtrSummary());
   g_logger.Info(g_virtualPositions.BuildDrawdownTimingSummary());
   g_logger.Info(g_virtualPositions.BuildLongExitMatrixSummary());
   g_logger.Info(g_virtualPositions.BuildShortExitMatrixSummary());
@@ -787,6 +821,22 @@ void OnTick(void) {
     maRegime == PB_MA_REGIME_REVERSAL_LATE &&
     localQuadrant == PB_LOCAL_QUADRANT_III;
 
+  // --------------------------------------------------
+  // ATR H1 de la dernière bougie clôturée.
+  // Il reste purement observateur dans la v1.23.
+  // --------------------------------------------------
+  double entryAtrPrice = 0.0;
+  double entryAtrPoints = 0.0;
+
+  bool entryAtrValid = false;
+
+  if (snapshot.signal != PB_SIGNAL_NONE) {
+    entryAtrValid =
+      TryGetAtrContext(
+      entryAtrPrice,
+      entryAtrPoints);
+  }
+
 
   if (!g_virtualPositions.ProcessSignal(
       snapshot.signal,
@@ -797,7 +847,9 @@ void OnTick(void) {
       executionQuote.ask,
       virtualEvent,
       allowFlatEntry,
-      allowReversalEntry)) {
+      allowReversalEntry,
+      entryAtrValid,
+      entryAtrPoints)) {
 
     g_logger.Error(
       StringFormat(
@@ -813,7 +865,78 @@ void OnTick(void) {
         "SIMULATION | %s",
         virtualEvent));
   }
+
+
+  // --------------------------------------------------
+  // Une observation ATR n'est enregistrée que si le
+  // signal a réellement ouvert une nouvelle position.
+  // --------------------------------------------------
+  bool positionOpened =
+    StringFind(
+    virtualEvent,
+    "OUVERTURE VIRTUELLE |") == 0 ||
+    StringFind(
+    virtualEvent,
+    "INVERSION VIRTUELLE |") == 0;
+
+
+  if (positionOpened) {
+
+    if (entryAtrValid &&
+      entryAtrPoints > 0.0) {
+
+      double stopLossAtr =
+        InpVirtualStopLossPoints /
+        entryAtrPoints;
+
+      double takeProfitAtr =
+        InpVirtualTakeProfitPoints /
+        entryAtrPoints;
+
+      double breakEvenAtr =
+        InpVirtualBreakEvenTriggerPoints /
+        entryAtrPoints;
+
+
+      g_logger.Info(
+        StringFormat(
+          "DIAG ATR ENTRÉE | "
+          "TF=%s | "
+          "Période=%d | "
+          "ATR[1]=%.*f | "
+          "ATR=%.1f points | "
+          "SL=%.2f ATR | "
+          "TP=%.2f ATR | "
+          "BE=%.2f ATR",
+
+          EnumToString(
+            InpAtrTimeframe),
+
+          InpAtrPeriod,
+
+          _Digits,
+          entryAtrPrice,
+
+          entryAtrPoints,
+          stopLossAtr,
+          takeProfitAtr,
+          breakEvenAtr));
+    } else {
+
+      g_logger.Warning(
+        StringFormat(
+          "DIAG ATR ENTRÉE | "
+          "ATR indisponible | "
+          "TF=%s | Période=%d",
+
+          EnumToString(
+            InpAtrTimeframe),
+
+          InpAtrPeriod));
+    }
+  }
 }
+
 
 bool TryGetTrendContext(
   double &close1,
@@ -869,6 +992,55 @@ bool TryGetTrendContext(
   close1 = closeBuffer[0];
   ma1 = ma1Buffer[0];
   ma2 = ma2Buffer[0];
+
+  return true;
+}
+
+
+//+------------------------------------------------------------------+
+//| Lecture de l'ATR de la dernière bougie clôturée                   |
+//+------------------------------------------------------------------+
+bool TryGetAtrContext(
+  double &atrPrice,
+  double &atrPoints) {
+
+  atrPrice = 0.0;
+  atrPoints = 0.0;
+
+  if (g_atrHandle == INVALID_HANDLE)
+  return false;
+
+  if (InpAtrPeriod <= 0)
+  return false;
+
+  if (BarsCalculated(g_atrHandle) <
+    InpAtrPeriod + 1) {
+
+    return false;
+  }
+
+  double atrBuffer[1];
+
+  if (CopyBuffer(
+      g_atrHandle,
+      0,
+      1,
+      1,
+      atrBuffer) != 1) {
+
+    return false;
+  }
+
+  atrPrice = atrBuffer[0];
+
+  if (atrPrice <= 0.0 ||
+    _Point <= 0.0) {
+
+    return false;
+  }
+
+  atrPoints =
+    atrPrice / _Point;
 
   return true;
 }
