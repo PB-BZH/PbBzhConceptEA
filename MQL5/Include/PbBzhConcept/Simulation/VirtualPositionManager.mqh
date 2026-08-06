@@ -48,6 +48,143 @@ string VirtualPositionStateToString(
 
 
 // --------------------------------------------------
+// Convertit le motif de sortie en texte.
+// --------------------------------------------------
+string VirtualExitReasonToString(
+  const ENUM_PB_VIRTUAL_EXIT_REASON reason) {
+  switch (reason) {
+    case PB_VIRTUAL_EXIT_SIGNAL:
+      return "SIGNAL";
+
+    case PB_VIRTUAL_EXIT_STOP_LOSS:
+      return "STOP_LOSS";
+
+    case PB_VIRTUAL_EXIT_TAKE_PROFIT:
+      return "TAKE_PROFIT";
+
+    default:
+      return "INCONNU";
+  }
+}
+
+
+// --------------------------------------------------
+// Capacité maximale du bilan annuel.
+// 64 années couvrent très largement les tests usuels.
+// --------------------------------------------------
+#define PB_VIRTUAL_ANNUAL_STATS_CAPACITY 64
+
+
+// --------------------------------------------------
+// Statistiques agrégées pour une année civile.
+// Les trades sont rattachés à l'année de leur clôture.
+// --------------------------------------------------
+struct SPbVirtualAnnualStatistics {
+  int year;
+
+  datetime firstObservedTime;
+  datetime lastObservedTime;
+
+  int closedTradeCount;
+  int winningTradeCount;
+  int losingTradeCount;
+  int breakEvenTradeCount;
+
+  int currentLosingStreak;
+  int maxLosingStreak;
+
+  double totalClosedPoints;
+  double grossProfitMoney;
+  double grossLossMoney;
+  double totalClosedMoney;
+
+  double startCapital;
+  double endCapital;
+
+  double peakCapital;
+  double maxCapitalDrawdownMoney;
+  double maxCapitalDrawdownPercent;
+
+  double peakEquity;
+  double maxEquityDrawdownMoney;
+  double maxEquityDrawdownPercent;
+};
+
+
+// --------------------------------------------------
+// Capacité maximale du rapport détaillé des trades.
+// 8192 enregistrements couvrent très largement les
+// campagnes H1 actuellement réalisées.
+// --------------------------------------------------
+#define PB_VIRTUAL_CLOSED_TRADES_CAPACITY 8192
+
+
+// --------------------------------------------------
+// Photographie complète d'un trade virtuel clôturé.
+// Aucune chaîne n'est stockée afin de limiter la mémoire.
+// --------------------------------------------------
+struct SPbVirtualClosedTradeRecord {
+  int sequence;
+
+  datetime entryTime;
+  datetime exitTime;
+
+  ENUM_PB_VIRTUAL_POSITION_STATE positionState;
+  ENUM_PB_VIRTUAL_EXIT_REASON exitReason;
+
+  bool openedAfterInversion;
+
+  double entryPrice;
+  double exitPrice;
+  double volumeLots;
+  double entrySpreadPoints;
+
+  int stopLossPoints;
+  int takeProfitPoints;
+  int breakEvenTriggerPoints;
+
+  double initialStopLossPrice;
+  double initialTakeProfitPrice;
+  double finalStopLossPrice;
+  double finalTakeProfitPrice;
+
+  bool breakEvenActivated;
+  bool profitLockActivated;
+
+  double resultPoints;
+  double resultMoney;
+  double resultRPoints;
+  double resultRMoney;
+
+  double maxFavorablePoints;
+  double maxFavorableR;
+
+  double openingCapital;
+  double targetRiskMoney;
+  double estimatedLossAtStop;
+
+  bool entryAtrValid;
+  double entryAtrPoints;
+  double entryStopLossAtr;
+
+  SMaDynamics entryMaDynamics;
+  SLocalMarketDynamics entryLocalDynamics;
+
+  bool trendContextValid;
+  double trendClose1;
+  double trendMa1;
+  double trendMa2;
+  bool trendAligned;
+
+  double pointSize;
+  int symbolDigits;
+  double tickSize;
+  double tickValue;
+  double contractSize;
+};
+
+
+// --------------------------------------------------
 // Gère une seule position virtuelle à la fois.
 // --------------------------------------------------
 class CVirtualPositionManager {
@@ -61,8 +198,14 @@ class CVirtualPositionManager {
   string m_accountCurrency;
   int m_accountCurrencyDigits;
 
+  // Distances fixes servant de repli.
   int m_stopLossPoints;
   int m_takeProfitPoints;
+
+  // Distances figées pour la position courante.
+  int m_currentStopLossPoints;
+  int m_currentTakeProfitPoints;
+  int m_currentBreakEvenTriggerPoints;
 
   double m_stopLossPrice;
   double m_takeProfitPrice;
@@ -174,6 +317,38 @@ class CVirtualPositionManager {
 
   int m_currentLosingStreak;
   int m_maxLosingStreak;
+
+  // --------------------------------------------------
+  // Bilans annuels persistants.
+  // --------------------------------------------------
+  SPbVirtualAnnualStatistics
+    m_annualStatistics[PB_VIRTUAL_ANNUAL_STATS_CAPACITY];
+
+  int m_annualStatisticsCount;
+
+  // --------------------------------------------------
+  // Rapport détaillé des trades clôturés.
+  // --------------------------------------------------
+  SPbVirtualClosedTradeRecord
+    m_closedTradeRecords[PB_VIRTUAL_CLOSED_TRADES_CAPACITY];
+
+  int m_closedTradeRecordCount;
+  int m_closedTradeRecordOverflowCount;
+
+  // --------------------------------------------------
+  // Contexte complémentaire de la position courante.
+  // --------------------------------------------------
+  double m_currentEntrySpreadPoints;
+
+  bool m_currentTrendContextValid;
+  double m_currentTrendClose1;
+  double m_currentTrendMa1;
+  double m_currentTrendMa2;
+  bool m_currentTrendAligned;
+
+  double m_currentEntryTickSize;
+  double m_currentEntryTickValue;
+  double m_currentEntryContractSize;
 
   // Plus haut capital virtuel clôturé atteint.
   double m_peakVirtualCapital;
@@ -790,6 +965,15 @@ class CVirtualPositionManager {
     const bool openedAfterInversion,
     const bool entryAtrValid,
     const double entryAtrPoints,
+    const int entryStopLossPoints,
+    const int entryTakeProfitPoints,
+    const int entryBreakEvenTriggerPoints,
+    const double entrySpreadPoints,
+    const bool entryTrendContextValid,
+    const double entryTrendClose1,
+    const double entryTrendMa1,
+    const double entryTrendMa2,
+    const bool entryTrendAligned,
     string &errorMessage) {
     errorMessage = "";
 
@@ -821,6 +1005,21 @@ class CVirtualPositionManager {
       return false;
     }
 
+    int resolvedStopLossPoints =
+      (entryStopLossPoints > 0)
+      ? entryStopLossPoints
+      : m_stopLossPoints;
+
+    int resolvedTakeProfitPoints =
+      (entryTakeProfitPoints > 0)
+      ? entryTakeProfitPoints
+      : m_takeProfitPoints;
+
+    int resolvedBreakEvenTriggerPoints =
+      (entryBreakEvenTriggerPoints > 0)
+      ? entryBreakEvenTriggerPoints
+      : m_breakEvenTriggerPoints;
+
     double stopLossPrice = 0.0;
     double takeProfitPrice = 0.0;
     ENUM_ORDER_TYPE orderType;
@@ -829,33 +1028,33 @@ class CVirtualPositionManager {
     if (newState == PB_VIRTUAL_POSITION_LONG) {
       orderType = ORDER_TYPE_BUY;
 
-      if (m_stopLossPoints > 0) {
+      if (resolvedStopLossPoints > 0) {
         stopLossPrice =
           NormalizeDouble(
-          entryPrice - m_stopLossPoints * m_point,
+          entryPrice - resolvedStopLossPoints * m_point,
           m_digits);
       }
 
-      if (m_takeProfitPoints > 0) {
+      if (resolvedTakeProfitPoints > 0) {
         takeProfitPrice =
           NormalizeDouble(
-          entryPrice + m_takeProfitPoints * m_point,
+          entryPrice + resolvedTakeProfitPoints * m_point,
           m_digits);
       }
     } else {
       orderType = ORDER_TYPE_SELL;
 
-      if (m_stopLossPoints > 0) {
+      if (resolvedStopLossPoints > 0) {
         stopLossPrice =
           NormalizeDouble(
-          entryPrice + m_stopLossPoints * m_point,
+          entryPrice + resolvedStopLossPoints * m_point,
           m_digits);
       }
 
-      if (m_takeProfitPoints > 0) {
+      if (resolvedTakeProfitPoints > 0) {
         takeProfitPrice =
           NormalizeDouble(
-          entryPrice - m_takeProfitPoints * m_point,
+          entryPrice - resolvedTakeProfitPoints * m_point,
           m_digits);
       }
     }
@@ -894,6 +1093,15 @@ class CVirtualPositionManager {
     m_state = newState;
     m_entryTime = entryTime;
     m_entryPrice = entryPrice;
+
+    m_currentStopLossPoints =
+      resolvedStopLossPoints;
+
+    m_currentTakeProfitPoints =
+      resolvedTakeProfitPoints;
+
+    m_currentBreakEvenTriggerPoints =
+      resolvedBreakEvenTriggerPoints;
 
     // S0 conservé pour les statistiques v1.18 existantes.
     m_currentEntryMaSlopePoints =
@@ -953,12 +1161,57 @@ class CVirtualPositionManager {
     m_currentEntryStopLossAtr = 0.0;
 
     if (m_currentEntryAtrValid &&
-        m_stopLossPoints > 0) {
+        m_currentStopLossPoints > 0) {
 
       m_currentEntryStopLossAtr =
-        (double)m_stopLossPoints /
+        (double)m_currentStopLossPoints /
         m_currentEntryAtrPoints;
     }
+
+    // --------------------------------------------------
+    // Contexte complémentaire figé à l'ouverture.
+    // --------------------------------------------------
+    m_currentEntrySpreadPoints =
+      (entrySpreadPoints >= 0.0)
+      ? entrySpreadPoints
+      : 0.0;
+
+    m_currentTrendContextValid =
+      entryTrendContextValid;
+
+    m_currentTrendClose1 =
+      entryTrendContextValid
+      ? entryTrendClose1
+      : 0.0;
+
+    m_currentTrendMa1 =
+      entryTrendContextValid
+      ? entryTrendMa1
+      : 0.0;
+
+    m_currentTrendMa2 =
+      entryTrendContextValid
+      ? entryTrendMa2
+      : 0.0;
+
+    m_currentTrendAligned =
+      entryTrendContextValid &&
+      entryTrendAligned;
+
+    m_currentEntryTickSize =
+      SymbolInfoDouble(
+        m_symbol,
+        SYMBOL_TRADE_TICK_SIZE);
+
+    m_currentEntryTickValue =
+      SymbolInfoDouble(
+        m_symbol,
+        SYMBOL_TRADE_TICK_VALUE);
+
+    m_currentEntryContractSize =
+      SymbolInfoDouble(
+        m_symbol,
+        SYMBOL_TRADE_CONTRACT_SIZE);
 
 
     m_currentPositionOpenedAfterInversion =
@@ -998,6 +1251,19 @@ class CVirtualPositionManager {
       m_lastOpeningCapital,
 
       m_accountCurrency);
+
+    result += StringFormat(
+      " | Protections=SL %d pts / TP %d pts",
+      m_currentStopLossPoints,
+      m_currentTakeProfitPoints);
+
+    if (m_breakEvenEnabled &&
+        m_currentBreakEvenTriggerPoints > 0) {
+
+      result += StringFormat(
+        " | BE à +%d pts",
+        m_currentBreakEvenTriggerPoints);
+    }
 
     if (m_lastTargetRiskMoney > 0.0) {
       result += StringFormat(
@@ -1112,6 +1378,319 @@ class CVirtualPositionManager {
   }
 
   // --------------------------------------------------
+  // Extrait l'année civile d'un horodatage.
+  // --------------------------------------------------
+  int ExtractYear(
+    const datetime value) const {
+
+    if (value <= 0)
+      return 0;
+
+    MqlDateTime parts;
+
+    if (!TimeToStruct(
+        value,
+        parts)) {
+      return 0;
+    }
+
+    return parts.year;
+  }
+
+
+  // --------------------------------------------------
+  // Initialise une ligne de statistiques annuelles.
+  // --------------------------------------------------
+  void InitializeAnnualStatistics(
+    const int index,
+    const int year,
+    const datetime observationTime,
+    const double currentCapital,
+    const double currentEquity) {
+
+    m_annualStatistics[index].year = year;
+
+    m_annualStatistics[index].firstObservedTime =
+      observationTime;
+
+    m_annualStatistics[index].lastObservedTime =
+      observationTime;
+
+    m_annualStatistics[index].closedTradeCount = 0;
+    m_annualStatistics[index].winningTradeCount = 0;
+    m_annualStatistics[index].losingTradeCount = 0;
+    m_annualStatistics[index].breakEvenTradeCount = 0;
+
+    m_annualStatistics[index].currentLosingStreak = 0;
+    m_annualStatistics[index].maxLosingStreak = 0;
+
+    m_annualStatistics[index].totalClosedPoints = 0.0;
+    m_annualStatistics[index].grossProfitMoney = 0.0;
+    m_annualStatistics[index].grossLossMoney = 0.0;
+    m_annualStatistics[index].totalClosedMoney = 0.0;
+
+    m_annualStatistics[index].startCapital =
+      currentCapital;
+
+    m_annualStatistics[index].endCapital =
+      currentCapital;
+
+    m_annualStatistics[index].peakCapital =
+      currentCapital;
+
+    m_annualStatistics[index].maxCapitalDrawdownMoney = 0.0;
+    m_annualStatistics[index].maxCapitalDrawdownPercent = 0.0;
+
+    m_annualStatistics[index].peakEquity =
+      currentEquity;
+
+    m_annualStatistics[index].maxEquityDrawdownMoney = 0.0;
+    m_annualStatistics[index].maxEquityDrawdownPercent = 0.0;
+  }
+
+
+  // --------------------------------------------------
+  // Recherche l'index correspondant à une année.
+  // --------------------------------------------------
+  int FindAnnualStatisticsIndex(
+    const int year) const {
+
+    for (int index = 0;
+      index < m_annualStatisticsCount;
+      index++) {
+
+      if (m_annualStatistics[index].year == year)
+        return index;
+    }
+
+    return -1;
+  }
+
+
+  // --------------------------------------------------
+  // Retourne la ligne annuelle existante ou la crée.
+  // --------------------------------------------------
+  int GetOrCreateAnnualStatisticsIndex(
+    const datetime observationTime,
+    const double currentCapital,
+    const double currentEquity) {
+
+    int year =
+      ExtractYear(
+        observationTime);
+
+    if (year <= 0)
+      return -1;
+
+    int existingIndex =
+      FindAnnualStatisticsIndex(
+        year);
+
+    if (existingIndex >= 0)
+      return existingIndex;
+
+    if (m_annualStatisticsCount >=
+        PB_VIRTUAL_ANNUAL_STATS_CAPACITY) {
+      return -1;
+    }
+
+    int newIndex =
+      m_annualStatisticsCount;
+
+    m_annualStatisticsCount++;
+
+    InitializeAnnualStatistics(
+      newIndex,
+      year,
+      observationTime,
+      currentCapital,
+      currentEquity);
+
+    return newIndex;
+  }
+
+
+  // --------------------------------------------------
+  // Met à jour les drawdowns annuels de capital
+  // et d'équité à partir d'une observation courante.
+  // --------------------------------------------------
+  void UpdateAnnualDrawdowns(
+    const datetime observationTime,
+    const double currentCapital,
+    const double currentEquity) {
+
+    int index =
+      GetOrCreateAnnualStatisticsIndex(
+        observationTime,
+        currentCapital,
+        currentEquity);
+
+    if (index < 0)
+      return;
+
+    m_annualStatistics[index].lastObservedTime =
+      observationTime;
+
+    m_annualStatistics[index].endCapital =
+      currentCapital;
+
+    if (currentCapital >
+        m_annualStatistics[index].peakCapital) {
+
+      m_annualStatistics[index].peakCapital =
+        currentCapital;
+    }
+
+    double capitalDrawdownMoney =
+      m_annualStatistics[index].peakCapital-
+      currentCapital;
+
+    if (capitalDrawdownMoney < 0.0)
+      capitalDrawdownMoney = 0.0;
+
+    double capitalDrawdownPercent = 0.0;
+
+    if (m_annualStatistics[index].peakCapital > 0.0) {
+      capitalDrawdownPercent =
+        capitalDrawdownMoney/
+        m_annualStatistics[index].peakCapital*
+        100.0;
+    }
+
+    if (capitalDrawdownMoney >
+        m_annualStatistics[index].maxCapitalDrawdownMoney) {
+
+      m_annualStatistics[index].maxCapitalDrawdownMoney =
+        capitalDrawdownMoney;
+
+      m_annualStatistics[index].maxCapitalDrawdownPercent =
+        capitalDrawdownPercent;
+    }
+
+    if (currentEquity >
+        m_annualStatistics[index].peakEquity) {
+
+      m_annualStatistics[index].peakEquity =
+        currentEquity;
+    }
+
+    double equityDrawdownMoney =
+      m_annualStatistics[index].peakEquity-
+      currentEquity;
+
+    if (equityDrawdownMoney < 0.0)
+      equityDrawdownMoney = 0.0;
+
+    double equityDrawdownPercent = 0.0;
+
+    if (m_annualStatistics[index].peakEquity > 0.0) {
+      equityDrawdownPercent =
+        equityDrawdownMoney/
+        m_annualStatistics[index].peakEquity*
+        100.0;
+    }
+
+    if (equityDrawdownMoney >
+        m_annualStatistics[index].maxEquityDrawdownMoney) {
+
+      m_annualStatistics[index].maxEquityDrawdownMoney =
+        equityDrawdownMoney;
+
+      m_annualStatistics[index].maxEquityDrawdownPercent =
+        equityDrawdownPercent;
+    }
+  }
+
+
+  // --------------------------------------------------
+  // Enregistre un trade dans son année de clôture.
+  // --------------------------------------------------
+  void RecordAnnualClosedTrade(
+    const datetime exitTime,
+    const double resultPoints,
+    const double resultMoney,
+    const double capitalBeforeTrade,
+    const double capitalAfterTrade) {
+
+    int index =
+      GetOrCreateAnnualStatisticsIndex(
+        exitTime,
+        capitalBeforeTrade,
+        capitalBeforeTrade);
+
+    if (index < 0)
+      return;
+
+    m_annualStatistics[index].closedTradeCount++;
+
+    m_annualStatistics[index].totalClosedPoints +=
+      resultPoints;
+
+    m_annualStatistics[index].totalClosedMoney +=
+      resultMoney;
+
+    if (resultPoints > 0.0) {
+      m_annualStatistics[index].winningTradeCount++;
+
+      m_annualStatistics[index].grossProfitMoney +=
+        resultMoney;
+
+      m_annualStatistics[index].currentLosingStreak = 0;
+    } else if (resultPoints < 0.0) {
+      m_annualStatistics[index].losingTradeCount++;
+
+      m_annualStatistics[index].grossLossMoney +=
+        MathAbs(
+          resultMoney);
+
+      m_annualStatistics[index].currentLosingStreak++;
+
+      if (m_annualStatistics[index].currentLosingStreak >
+          m_annualStatistics[index].maxLosingStreak) {
+
+        m_annualStatistics[index].maxLosingStreak =
+          m_annualStatistics[index].currentLosingStreak;
+      }
+    } else {
+      m_annualStatistics[index].breakEvenTradeCount++;
+      m_annualStatistics[index].currentLosingStreak = 0;
+    }
+
+    UpdateAnnualDrawdowns(
+      exitTime,
+      capitalAfterTrade,
+      capitalAfterTrade);
+  }
+
+
+  // --------------------------------------------------
+  // Nettoie une valeur textuelle destinée au CSV.
+  // --------------------------------------------------
+  string SanitizeCsvValue(
+    const string value) const {
+
+    string result = value;
+
+    StringReplace(
+      result,
+      ";",
+      ",");
+
+    StringReplace(
+      result,
+      "\r",
+      " ");
+
+    StringReplace(
+      result,
+      "\n",
+      " ");
+
+    return result;
+  }
+
+
+  // --------------------------------------------------
   // Met à jour le drawdown de l'équité virtuelle.
   //
   // Équité virtuelle :
@@ -1212,6 +1791,16 @@ class CVirtualPositionManager {
       m_maxEquityDrawdownLowTime =
         tickTime;
     }
+
+    double currentVirtualCapital =
+      m_initialVirtualCapital+
+      m_totalClosedMoney;
+
+    UpdateAnnualDrawdowns(
+      tickTime,
+      currentVirtualCapital,
+      currentVirtualEquity);
+
     return true;
   }
 
@@ -1664,6 +2253,22 @@ class CVirtualPositionManager {
     const ENUM_PB_VIRTUAL_POSITION_STATE positionState,
     const double resultPoints,
     const double resultMoney) {
+
+    double capitalBeforeTrade =
+      m_initialVirtualCapital+
+      m_totalClosedMoney;
+
+    double capitalAfterTrade =
+      capitalBeforeTrade+
+      resultMoney;
+
+    RecordAnnualClosedTrade(
+      exitTime,
+      resultPoints,
+      resultMoney,
+      capitalBeforeTrade,
+      capitalAfterTrade);
+
     m_closedTradeCount++;
 
     m_totalClosedPoints += resultPoints;
@@ -1863,11 +2468,254 @@ class CVirtualPositionManager {
 
 
   // --------------------------------------------------
+  // Enregistre une ligne détaillée pour le trade clôturé.
+  // --------------------------------------------------
+  void RecordClosedTradeReport(
+    const datetime exitTime,
+    const double exitPrice,
+    const ENUM_PB_VIRTUAL_EXIT_REASON exitReason,
+    const double resultPoints,
+    const double resultMoney) {
+
+    if (m_closedTradeRecordCount >=
+        PB_VIRTUAL_CLOSED_TRADES_CAPACITY) {
+
+      m_closedTradeRecordOverflowCount++;
+      return;
+    }
+
+    int index = m_closedTradeRecordCount;
+
+    double initialStopLossPrice = 0.0;
+    double initialTakeProfitPrice = 0.0;
+
+    if (m_currentStopLossPoints > 0) {
+      if (m_state == PB_VIRTUAL_POSITION_LONG) {
+        initialStopLossPrice =
+          NormalizeDouble(
+            m_entryPrice -
+            m_currentStopLossPoints * m_point,
+            m_digits);
+      } else {
+        initialStopLossPrice =
+          NormalizeDouble(
+            m_entryPrice +
+            m_currentStopLossPoints * m_point,
+            m_digits);
+      }
+    }
+
+    if (m_currentTakeProfitPoints > 0) {
+      if (m_state == PB_VIRTUAL_POSITION_LONG) {
+        initialTakeProfitPrice =
+          NormalizeDouble(
+            m_entryPrice +
+            m_currentTakeProfitPoints * m_point,
+            m_digits);
+      } else {
+        initialTakeProfitPrice =
+          NormalizeDouble(
+            m_entryPrice -
+            m_currentTakeProfitPoints * m_point,
+            m_digits);
+      }
+    }
+
+    double resultRPoints = 0.0;
+
+    if (m_currentStopLossPoints > 0) {
+      resultRPoints =
+        resultPoints /
+        (double)m_currentStopLossPoints;
+    }
+
+    double resultRMoney = 0.0;
+
+    if (m_lastEstimatedLossAtStop > 0.0) {
+      resultRMoney =
+        resultMoney /
+        m_lastEstimatedLossAtStop;
+    } else if (m_lastTargetRiskMoney > 0.0) {
+      resultRMoney =
+        resultMoney /
+        m_lastTargetRiskMoney;
+    }
+
+    double maxFavorableR = 0.0;
+
+    if (m_currentStopLossPoints > 0) {
+      maxFavorableR =
+        m_maxFavorablePoints /
+        (double)m_currentStopLossPoints;
+    }
+
+    m_closedTradeRecords[index].sequence =
+      index + 1;
+
+    m_closedTradeRecords[index].entryTime =
+      m_entryTime;
+
+    m_closedTradeRecords[index].exitTime =
+      exitTime;
+
+    m_closedTradeRecords[index].positionState =
+      m_state;
+
+    m_closedTradeRecords[index].exitReason =
+      exitReason;
+
+    m_closedTradeRecords[index].openedAfterInversion =
+      m_currentPositionOpenedAfterInversion;
+
+    m_closedTradeRecords[index].entryPrice =
+      m_entryPrice;
+
+    m_closedTradeRecords[index].exitPrice =
+      exitPrice;
+
+    m_closedTradeRecords[index].volumeLots =
+      m_currentPositionVolumeLots;
+
+    m_closedTradeRecords[index].entrySpreadPoints =
+      m_currentEntrySpreadPoints;
+
+    m_closedTradeRecords[index].stopLossPoints =
+      m_currentStopLossPoints;
+
+    m_closedTradeRecords[index].takeProfitPoints =
+      m_currentTakeProfitPoints;
+
+    m_closedTradeRecords[index].breakEvenTriggerPoints =
+      m_currentBreakEvenTriggerPoints;
+
+    m_closedTradeRecords[index].initialStopLossPrice =
+      initialStopLossPrice;
+
+    m_closedTradeRecords[index].initialTakeProfitPrice =
+      initialTakeProfitPrice;
+
+    m_closedTradeRecords[index].finalStopLossPrice =
+      m_stopLossPrice;
+
+    m_closedTradeRecords[index].finalTakeProfitPrice =
+      m_takeProfitPrice;
+
+    m_closedTradeRecords[index].breakEvenActivated =
+      m_breakEvenActivated;
+
+    m_closedTradeRecords[index].profitLockActivated =
+      m_profitLockActivated;
+
+    m_closedTradeRecords[index].resultPoints =
+      resultPoints;
+
+    m_closedTradeRecords[index].resultMoney =
+      resultMoney;
+
+    m_closedTradeRecords[index].resultRPoints =
+      resultRPoints;
+
+    m_closedTradeRecords[index].resultRMoney =
+      resultRMoney;
+
+    m_closedTradeRecords[index].maxFavorablePoints =
+      m_maxFavorablePoints;
+
+    m_closedTradeRecords[index].maxFavorableR =
+      maxFavorableR;
+
+    m_closedTradeRecords[index].openingCapital =
+      m_lastOpeningCapital;
+
+    m_closedTradeRecords[index].targetRiskMoney =
+      m_lastTargetRiskMoney;
+
+    m_closedTradeRecords[index].estimatedLossAtStop =
+      m_lastEstimatedLossAtStop;
+
+    m_closedTradeRecords[index].entryAtrValid =
+      m_currentEntryAtrValid;
+
+    m_closedTradeRecords[index].entryAtrPoints =
+      m_currentEntryAtrPoints;
+
+    m_closedTradeRecords[index].entryStopLossAtr =
+      m_currentEntryStopLossAtr;
+
+    m_closedTradeRecords[index].entryMaDynamics.slopeEarlier =
+      m_currentEntryMaDynamics.slopeEarlier;
+
+    m_closedTradeRecords[index].entryMaDynamics.slopePrevious =
+      m_currentEntryMaDynamics.slopePrevious;
+
+    m_closedTradeRecords[index].entryMaDynamics.slopeCurrent =
+      m_currentEntryMaDynamics.slopeCurrent;
+
+    m_closedTradeRecords[index].entryMaDynamics.accelerationPrevious =
+      m_currentEntryMaDynamics.accelerationPrevious;
+
+    m_closedTradeRecords[index].entryMaDynamics.accelerationCurrent =
+      m_currentEntryMaDynamics.accelerationCurrent;
+
+    m_closedTradeRecords[index].entryLocalDynamics.isValid =
+      m_currentEntryLocalDynamics.isValid;
+
+    m_closedTradeRecords[index].entryLocalDynamics.directionalChangePoints =
+      m_currentEntryLocalDynamics.directionalChangePoints;
+
+    m_closedTradeRecords[index].entryLocalDynamics.rangePoints =
+      m_currentEntryLocalDynamics.rangePoints;
+
+    m_closedTradeRecords[index].entryLocalDynamics.directionalSlopePointsPerHour =
+      m_currentEntryLocalDynamics.directionalSlopePointsPerHour;
+
+    m_closedTradeRecords[index].entryLocalDynamics.directionalCurvaturePointsPerHour2 =
+      m_currentEntryLocalDynamics.directionalCurvaturePointsPerHour2;
+
+    m_closedTradeRecords[index].entryLocalDynamics.quadraticRSquared =
+      m_currentEntryLocalDynamics.quadraticRSquared;
+
+    m_closedTradeRecords[index].trendContextValid =
+      m_currentTrendContextValid;
+
+    m_closedTradeRecords[index].trendClose1 =
+      m_currentTrendClose1;
+
+    m_closedTradeRecords[index].trendMa1 =
+      m_currentTrendMa1;
+
+    m_closedTradeRecords[index].trendMa2 =
+      m_currentTrendMa2;
+
+    m_closedTradeRecords[index].trendAligned =
+      m_currentTrendAligned;
+
+    m_closedTradeRecords[index].pointSize =
+      m_point;
+
+    m_closedTradeRecords[index].symbolDigits =
+      m_digits;
+
+    m_closedTradeRecords[index].tickSize =
+      m_currentEntryTickSize;
+
+    m_closedTradeRecords[index].tickValue =
+      m_currentEntryTickValue;
+
+    m_closedTradeRecords[index].contractSize =
+      m_currentEntryContractSize;
+
+    m_closedTradeRecordCount++;
+  }
+
+
+  // --------------------------------------------------
   // Ferme la position virtuelle actuelle.
   // --------------------------------------------------
   bool CloseCurrentPosition(
     const datetime exitTime,
     const double exitPrice,
+    const ENUM_PB_VIRTUAL_EXIT_REASON exitReason,
     double &resultPoints,
     double &resultMoney,
     string &errorMessage) {
@@ -1939,6 +2787,13 @@ class CVirtualPositionManager {
     SLocalMarketDynamics closedEntryLocalDynamics =
       m_currentEntryLocalDynamics;
 
+    RecordClosedTradeReport(
+      exitTime,
+      exitPrice,
+      exitReason,
+      resultPoints,
+      resultMoney);
+
     RecordClosedTrade(
       exitTime,
       closedState,
@@ -2001,8 +2856,24 @@ class CVirtualPositionManager {
     m_currentEntryAtrPoints = 0.0;
     m_currentEntryStopLossAtr = 0.0;
 
+    m_currentEntrySpreadPoints = 0.0;
+
+    m_currentTrendContextValid = false;
+    m_currentTrendClose1 = 0.0;
+    m_currentTrendMa1 = 0.0;
+    m_currentTrendMa2 = 0.0;
+    m_currentTrendAligned = false;
+
+    m_currentEntryTickSize = 0.0;
+    m_currentEntryTickValue = 0.0;
+    m_currentEntryContractSize = 0.0;
+
     m_stopLossPrice = 0.0;
     m_takeProfitPrice = 0.0;
+
+    m_currentStopLossPoints = 0;
+    m_currentTakeProfitPoints = 0;
+    m_currentBreakEvenTriggerPoints = 0;
 
     m_currentPositionVolumeLots = 0.0;
 
@@ -2027,6 +2898,10 @@ class CVirtualPositionManager {
 
     m_stopLossPoints = 0;
     m_takeProfitPoints = 0;
+
+    m_currentStopLossPoints = 0;
+    m_currentTakeProfitPoints = 0;
+    m_currentBreakEvenTriggerPoints = 0;
 
     m_initialVirtualCapital = 0.0;
     m_currentPositionVolumeLots = 0.0;
@@ -2398,6 +3273,10 @@ string BuildInversionReversalLateQuadrantIIILosingTurningTimeSummary(void) const
     m_stopLossPrice = 0.0;
     m_takeProfitPrice = 0.0;
 
+    m_currentStopLossPoints = 0;
+    m_currentTakeProfitPoints = 0;
+    m_currentBreakEvenTriggerPoints = 0;
+
     // État propre de la position courante.
     // La configuration reste conservée.
     m_breakEvenActivated = false;
@@ -2434,6 +3313,18 @@ string BuildInversionReversalLateQuadrantIIILosingTurningTimeSummary(void) const
     m_currentEntryAtrValid = false;
     m_currentEntryAtrPoints = 0.0;
     m_currentEntryStopLossAtr = 0.0;
+
+    m_currentEntrySpreadPoints = 0.0;
+
+    m_currentTrendContextValid = false;
+    m_currentTrendClose1 = 0.0;
+    m_currentTrendMa1 = 0.0;
+    m_currentTrendMa2 = 0.0;
+    m_currentTrendAligned = false;
+
+    m_currentEntryTickSize = 0.0;
+    m_currentEntryTickValue = 0.0;
+    m_currentEntryContractSize = 0.0;
 
     // Statistiques ATR à l'entrée.
     m_entryAtrValidTradeCount = 0;
@@ -2519,6 +3410,11 @@ string BuildInversionReversalLateQuadrantIIILosingTurningTimeSummary(void) const
 
     m_currentLosingStreak = 0;
     m_maxLosingStreak = 0;
+
+    m_annualStatisticsCount = 0;
+
+    m_closedTradeRecordCount = 0;
+    m_closedTradeRecordOverflowCount = 0;
 
     m_reversalCount = 0;
 
@@ -3318,10 +4214,10 @@ string BuildInversionReversalLateQuadrantIIILosingTurningTimeSummary(void) const
       // ------------------------------------------------
       if (m_breakEvenEnabled &&
           !m_breakEvenActivated &&
-          m_breakEvenTriggerPoints > 0 &&
+          m_currentBreakEvenTriggerPoints > 0 &&
           m_stopLossPrice > 0.0 &&
           favorablePoints >=
-            (double)m_breakEvenTriggerPoints) {
+            (double)m_currentBreakEvenTriggerPoints) {
 
         double previousStopLossPrice =
           m_stopLossPrice;
@@ -3356,7 +4252,7 @@ string BuildInversionReversalLateQuadrantIIILosingTurningTimeSummary(void) const
 
           favorablePoints,
 
-          m_breakEvenTriggerPoints);
+          m_currentBreakEvenTriggerPoints);
       }
 
       return true;
@@ -3376,9 +4272,15 @@ string BuildInversionReversalLateQuadrantIIILosingTurningTimeSummary(void) const
     double resultMoney = 0.0;
     string closeError;
 
+    ENUM_PB_VIRTUAL_EXIT_REASON closeReason =
+      stopLossHit
+      ? PB_VIRTUAL_EXIT_STOP_LOSS
+      : PB_VIRTUAL_EXIT_TAKE_PROFIT;
+
     if (!CloseCurrentPosition(
         tickTime,
         exitPrice,
+        closeReason,
         resultPoints,
         resultMoney,
         closeError)) {
@@ -3474,7 +4376,15 @@ bool ProcessSignal(
   const bool allowFlatEntry = true,
   const bool allowReversalEntry = true,
   const bool entryAtrValid = false,
-  const double entryAtrPoints = 0.0) {
+  const double entryAtrPoints = 0.0,
+  const int entryStopLossPoints = 0,
+  const int entryTakeProfitPoints = 0,
+  const int entryBreakEvenTriggerPoints = 0,
+  const bool entryTrendContextValid = false,
+  const double entryTrendClose1 = 0.0,
+  const double entryTrendMa1 = 0.0,
+  const double entryTrendMa2 = 0.0,
+  const bool entryTrendAligned = false) {
     eventMessage = "";
 
     if (!m_isInitialized) {
@@ -3495,6 +4405,14 @@ bool ProcessSignal(
         ask);
 
       return false;
+    }
+
+    double entrySpreadPoints = 0.0;
+
+    if (m_point > 0.0) {
+      entrySpreadPoints =
+        (ask - bid) /
+        m_point;
     }
 
     m_lastKnownTime = executionTime;
@@ -3554,6 +4472,15 @@ bool ProcessSignal(
           false,
           entryAtrValid,
           entryAtrPoints,
+          entryStopLossPoints,
+          entryTakeProfitPoints,
+          entryBreakEvenTriggerPoints,
+          entrySpreadPoints,
+          entryTrendContextValid,
+          entryTrendClose1,
+          entryTrendMa1,
+          entryTrendMa2,
+          entryTrendAligned,
           openError)) {
         eventMessage = StringFormat(
           "Ouverture virtuelle impossible : %s",
@@ -3627,6 +4554,7 @@ bool ProcessSignal(
     if (!CloseCurrentPosition(
         executionTime,
         exitPrice,
+        PB_VIRTUAL_EXIT_SIGNAL,
         resultPoints,
         resultMoney,
         closeError)) {
@@ -3698,6 +4626,15 @@ if (!allowReversalEntry) {
         true,
         entryAtrValid,
         entryAtrPoints,
+        entryStopLossPoints,
+        entryTakeProfitPoints,
+        entryBreakEvenTriggerPoints,
+        entrySpreadPoints,
+        entryTrendContextValid,
+        entryTrendClose1,
+        entryTrendMa1,
+        entryTrendMa2,
+        entryTrendAligned,
         openError)) {
       eventMessage = StringFormat(
         "La position précédente a été fermée, "
@@ -5045,6 +5982,490 @@ if (!allowReversalEntry) {
       m_losingReached100Points,
       m_losingReached200Points,
       m_losingReached300Points);
+  }
+
+
+  // --------------------------------------------------
+  // Nombre d'années présentes dans le bilan.
+  // --------------------------------------------------
+  int AnnualStatisticsCount(void) const {
+    return m_annualStatisticsCount;
+  }
+
+
+  // --------------------------------------------------
+  // Construit une ligne de bilan annuel pour le journal.
+  // --------------------------------------------------
+  string BuildAnnualSummary(
+    const int index) const {
+
+    if (index < 0 ||
+        index >= m_annualStatisticsCount) {
+      return "BILAN ANNUEL : index invalide";
+    }
+
+    double profitFactor = 0.0;
+
+    if (m_annualStatistics[index].grossLossMoney > 0.0) {
+      profitFactor =
+        m_annualStatistics[index].grossProfitMoney/
+        m_annualStatistics[index].grossLossMoney;
+    }
+
+    double expectancy = 0.0;
+
+    if (m_annualStatistics[index].closedTradeCount > 0) {
+      expectancy =
+        m_annualStatistics[index].totalClosedMoney/
+        (double)m_annualStatistics[index].closedTradeCount;
+    }
+
+    return StringFormat(
+      "BILAN ANNUEL %d | "
+      "Trades=%d | Gagnants=%d | Perdants=%d | Neutres=%d | "
+      "Série pertes max=%d | Points=%.1f | "
+      "Gains=%.2f %s | Pertes=%.2f %s | Net=%.2f %s | "
+      "PF=%.2f | Espérance=%.2f %s | "
+      "DD capital=%.2f %s (%.2f%%) | "
+      "DD équité=%.2f %s (%.2f%%)",
+
+      m_annualStatistics[index].year,
+      m_annualStatistics[index].closedTradeCount,
+      m_annualStatistics[index].winningTradeCount,
+      m_annualStatistics[index].losingTradeCount,
+      m_annualStatistics[index].breakEvenTradeCount,
+      m_annualStatistics[index].maxLosingStreak,
+      m_annualStatistics[index].totalClosedPoints,
+
+      m_annualStatistics[index].grossProfitMoney,
+      m_accountCurrency,
+
+      m_annualStatistics[index].grossLossMoney,
+      m_accountCurrency,
+
+      m_annualStatistics[index].totalClosedMoney,
+      m_accountCurrency,
+
+      profitFactor,
+      expectancy,
+      m_accountCurrency,
+
+      m_annualStatistics[index].maxCapitalDrawdownMoney,
+      m_accountCurrency,
+      m_annualStatistics[index].maxCapitalDrawdownPercent,
+
+      m_annualStatistics[index].maxEquityDrawdownMoney,
+      m_accountCurrency,
+      m_annualStatistics[index].maxEquityDrawdownPercent);
+  }
+
+
+  // --------------------------------------------------
+  // En-tête du rapport global persistant.
+  // --------------------------------------------------
+  string BuildPersistentGlobalCsvHeader(void) const {
+    return
+      "RunId;SimulationEnd;Version;Source;Symbol;SignalTF;"
+      "TestStart;TestEnd;Strategy;Parameters;BuyFunnel;Currency;"
+      "Openings;ClosedTrades;Wins;Losses;Neutrals;MaxLossStreak;"
+      "Inversions;SignalExits;StopLossExits;TakeProfitExits;"
+      "Points;GrossProfit;GrossLoss;Net;ProfitFactor;Expectancy;"
+      "MaxCapitalDDMoney;MaxCapitalDDPercent;"
+      "MaxEquityDDMoney;MaxEquityDDPercent;"
+      "InitialCapital;FinalCapital";
+  }
+
+
+  // --------------------------------------------------
+  // Ligne du rapport global persistant.
+  // --------------------------------------------------
+  string BuildPersistentGlobalCsvLine(
+    const string runId,
+    const string SimulationEnd,
+    const string version,
+    const string sourceFile,
+    const string symbol,
+    const string signalTimeframe,
+    const datetime testStart,
+    const datetime testEnd,
+    const string strategyDescription,
+    const string parameterDescription,
+    const string buyFunnelDescription) const {
+
+    double profitFactor = 0.0;
+
+    if (m_grossLossMoney > 0.0) {
+      profitFactor =
+        m_grossProfitMoney/
+        m_grossLossMoney;
+    }
+
+    double expectancy = 0.0;
+
+    if (m_closedTradeCount > 0) {
+      expectancy =
+        m_totalClosedMoney/
+        (double)m_closedTradeCount;
+    }
+
+    double finalCapital =
+      m_initialVirtualCapital+
+      m_totalClosedMoney;
+
+    string line =
+      SanitizeCsvValue(runId)+";"+
+      SanitizeCsvValue(SimulationEnd)+";"+
+      SanitizeCsvValue(version)+";"+
+      SanitizeCsvValue(sourceFile)+";"+
+      SanitizeCsvValue(symbol)+";"+
+      SanitizeCsvValue(signalTimeframe)+";"+
+      SanitizeCsvValue(
+        TimeToString(testStart, TIME_DATE|TIME_MINUTES))+";"+
+      SanitizeCsvValue(
+        TimeToString(testEnd, TIME_DATE|TIME_MINUTES))+";"+
+      SanitizeCsvValue(strategyDescription)+";"+
+      SanitizeCsvValue(parameterDescription)+";"+
+      SanitizeCsvValue(buyFunnelDescription)+";"+
+      SanitizeCsvValue(m_accountCurrency);
+
+    line += StringFormat(
+      ";%d;%d;%d;%d;%d;%d;%d;%d;%d;%d",
+      m_openCount,
+      m_closedTradeCount,
+      m_winningTradeCount,
+      m_losingTradeCount,
+      m_breakEvenTradeCount,
+      m_maxLosingStreak,
+      m_reversalCount,
+      m_signalExitCount,
+      m_stopLossExitCount,
+      m_takeProfitExitCount);
+
+    line += StringFormat(
+      ";%.1f;%.2f;%.2f;%.2f;%.4f;%.2f",
+      m_totalClosedPoints,
+      m_grossProfitMoney,
+      m_grossLossMoney,
+      m_totalClosedMoney,
+      profitFactor,
+      expectancy);
+
+    line += StringFormat(
+      ";%.2f;%.4f;%.2f;%.4f;%.2f;%.2f",
+      m_maxDrawdownMoney,
+      m_maxDrawdownPercent,
+      m_maxEquityDrawdownMoney,
+      m_maxEquityDrawdownPercent,
+      m_initialVirtualCapital,
+      finalCapital);
+
+    return line;
+  }
+
+
+  // --------------------------------------------------
+  // En-tête du rapport annuel persistant.
+  // --------------------------------------------------
+  string BuildPersistentAnnualCsvHeader(void) const {
+    return
+      "RunId;Version;Symbol;SignalTF;TestStart;TestEnd;Year;"
+      "FirstObserved;LastObserved;Trades;Wins;Losses;Neutrals;"
+      "MaxLossStreak;Points;GrossProfit;GrossLoss;Net;"
+      "ProfitFactor;Expectancy;StartCapital;EndCapital;"
+      "MaxCapitalDDMoney;MaxCapitalDDPercent;"
+      "MaxEquityDDMoney;MaxEquityDDPercent;Currency";
+  }
+
+
+  // --------------------------------------------------
+  // Ligne annuelle du rapport persistant.
+  // --------------------------------------------------
+  string BuildPersistentAnnualCsvLine(
+    const int index,
+    const string runId,
+    const string version,
+    const string symbol,
+    const string signalTimeframe,
+    const datetime testStart,
+    const datetime testEnd) const {
+
+    if (index < 0 ||
+        index >= m_annualStatisticsCount) {
+      return "";
+    }
+
+    double profitFactor = 0.0;
+
+    if (m_annualStatistics[index].grossLossMoney > 0.0) {
+      profitFactor =
+        m_annualStatistics[index].grossProfitMoney/
+        m_annualStatistics[index].grossLossMoney;
+    }
+
+    double expectancy = 0.0;
+
+    if (m_annualStatistics[index].closedTradeCount > 0) {
+      expectancy =
+        m_annualStatistics[index].totalClosedMoney/
+        (double)m_annualStatistics[index].closedTradeCount;
+    }
+
+    string line =
+      SanitizeCsvValue(runId)+";"+
+      SanitizeCsvValue(version)+";"+
+      SanitizeCsvValue(symbol)+";"+
+      SanitizeCsvValue(signalTimeframe)+";"+
+      SanitizeCsvValue(
+        TimeToString(testStart, TIME_DATE|TIME_MINUTES))+";"+
+      SanitizeCsvValue(
+        TimeToString(testEnd, TIME_DATE|TIME_MINUTES));
+
+    line += StringFormat(
+      ";%d;%s;%s;%d;%d;%d;%d;%d",
+      m_annualStatistics[index].year,
+      TimeToString(
+        m_annualStatistics[index].firstObservedTime,
+        TIME_DATE|TIME_MINUTES),
+      TimeToString(
+        m_annualStatistics[index].lastObservedTime,
+        TIME_DATE|TIME_MINUTES),
+      m_annualStatistics[index].closedTradeCount,
+      m_annualStatistics[index].winningTradeCount,
+      m_annualStatistics[index].losingTradeCount,
+      m_annualStatistics[index].breakEvenTradeCount,
+      m_annualStatistics[index].maxLosingStreak);
+
+    line += StringFormat(
+      ";%.1f;%.2f;%.2f;%.2f;%.4f;%.2f",
+      m_annualStatistics[index].totalClosedPoints,
+      m_annualStatistics[index].grossProfitMoney,
+      m_annualStatistics[index].grossLossMoney,
+      m_annualStatistics[index].totalClosedMoney,
+      profitFactor,
+      expectancy);
+
+    line += StringFormat(
+      ";%.2f;%.2f;%.2f;%.4f;%.2f;%.4f;%s",
+      m_annualStatistics[index].startCapital,
+      m_annualStatistics[index].endCapital,
+      m_annualStatistics[index].maxCapitalDrawdownMoney,
+      m_annualStatistics[index].maxCapitalDrawdownPercent,
+      m_annualStatistics[index].maxEquityDrawdownMoney,
+      m_annualStatistics[index].maxEquityDrawdownPercent,
+      SanitizeCsvValue(m_accountCurrency));
+
+    return line;
+  }
+
+
+  // --------------------------------------------------
+  // Nombre de trades disponibles pour le rapport détaillé.
+  // --------------------------------------------------
+  int ClosedTradeReportCount(void) const {
+    return m_closedTradeRecordCount;
+  }
+
+
+  // --------------------------------------------------
+  // Nombre de trades non enregistrés faute de capacité.
+  // --------------------------------------------------
+  int ClosedTradeReportOverflowCount(void) const {
+    return m_closedTradeRecordOverflowCount;
+  }
+
+
+  // --------------------------------------------------
+  // En-tête du rapport détaillé des trades clôturés.
+  // --------------------------------------------------
+  string BuildPersistentClosedTradeCsvHeader(void) const {
+    return
+      "RunId;Version;Symbol;SignalTF;LocalTF;TrendTF;AtrTF;"
+      "Sequence;EntryTime;ExitTime;DurationMinutes;"
+      "Direction;Origin;ExitReason;Outcome;"
+      "EntryPrice;ExitPrice;VolumeLots;EntrySpreadPoints;"
+      "SLPoints;TPPoints;BETriggerPoints;"
+      "InitialSLPrice;InitialTPPrice;FinalSLPrice;FinalTPPrice;"
+      "BEActivated;ProfitLockActivated;"
+      "ResultPoints;ResultMoney;ResultRPoints;ResultRMoney;"
+      "MFEPoints;MFER;OpeningCapital;TargetRiskMoney;"
+      "EstimatedLossAtStop;ATRValid;ATRPoints;SL_ATR;"
+      "MARegime;S2;S1;S0;A1;A0;"
+      "LocalValid;LocalQuadrant;DirectionalChangePoints;"
+      "RangePoints;LocalSlopePointsPerHour;"
+      "LocalCurvaturePointsPerHour2;LocalR2;"
+      "LocalTrendStrength;LocalDirectionalEfficiency;"
+      "TrendValid;TrendClose1;TrendMa1;TrendMa2;TrendAligned;"
+      "Point;Digits;TickSize;TickValue;ContractSize;Currency";
+  }
+
+
+  // --------------------------------------------------
+  // Ligne du rapport détaillé des trades clôturés.
+  // --------------------------------------------------
+  string BuildPersistentClosedTradeCsvLine(
+    const int index,
+    const string runId,
+    const string version,
+    const string symbol,
+    const string signalTimeframe,
+    const string localTimeframe,
+    const string trendTimeframe,
+    const string atrTimeframe) const {
+
+    if (index < 0 ||
+        index >= m_closedTradeRecordCount) {
+      return "";
+    }
+
+    SPbVirtualClosedTradeRecord record =
+      m_closedTradeRecords[index];
+
+    long durationSeconds =
+      (long)record.exitTime -
+      (long)record.entryTime;
+
+    if (durationSeconds < 0)
+      durationSeconds = 0;
+
+    long durationMinutes =
+      durationSeconds / 60;
+
+    string origin =
+      record.openedAfterInversion
+      ? "POST_INVERSION"
+      : "FLAT";
+
+    string outcome = "NEUTRAL";
+
+    if (record.resultPoints > 0.0)
+      outcome = "WIN";
+    else if (record.resultPoints < 0.0)
+      outcome = "LOSS";
+
+    ENUM_PB_MA_DYNAMICS_REGIME maRegime =
+      DetermineMaDynamicsRegime(
+        record.entryMaDynamics);
+
+    ENUM_PB_LOCAL_DYNAMICS_QUADRANT localQuadrant =
+      DetermineLocalDynamicsQuadrant(
+        record.entryLocalDynamics);
+
+    double localTrendStrength = 0.0;
+    double localDirectionalEfficiency = 0.0;
+
+    if (record.entryLocalDynamics.isValid &&
+        record.entryLocalDynamics.rangePoints > 0.0) {
+
+      localTrendStrength =
+        record.entryLocalDynamics.directionalSlopePointsPerHour /
+        record.entryLocalDynamics.rangePoints;
+
+      localDirectionalEfficiency =
+        record.entryLocalDynamics.directionalChangePoints /
+        record.entryLocalDynamics.rangePoints;
+    }
+
+    string line =
+      SanitizeCsvValue(runId)+";"+
+      SanitizeCsvValue(version)+";"+
+      SanitizeCsvValue(symbol)+";"+
+      SanitizeCsvValue(signalTimeframe)+";"+
+      SanitizeCsvValue(localTimeframe)+";"+
+      SanitizeCsvValue(trendTimeframe)+";"+
+      SanitizeCsvValue(atrTimeframe)+";"+
+      IntegerToString(record.sequence)+";"+
+      SanitizeCsvValue(
+        TimeToString(
+          record.entryTime,
+          TIME_DATE|TIME_SECONDS))+";"+
+      SanitizeCsvValue(
+        TimeToString(
+          record.exitTime,
+          TIME_DATE|TIME_SECONDS))+";"+
+      IntegerToString(durationMinutes)+";"+
+      SanitizeCsvValue(
+        VirtualPositionStateToString(
+          record.positionState))+";"+
+      SanitizeCsvValue(origin)+";"+
+      SanitizeCsvValue(
+        VirtualExitReasonToString(
+          record.exitReason))+";"+
+      SanitizeCsvValue(outcome);
+
+    line +=
+      ";"+DoubleToString(record.entryPrice, record.symbolDigits)+
+      ";"+DoubleToString(record.exitPrice, record.symbolDigits)+
+      ";"+DoubleToString(record.volumeLots, 4)+
+      ";"+DoubleToString(record.entrySpreadPoints, 2)+
+      ";"+IntegerToString(record.stopLossPoints)+
+      ";"+IntegerToString(record.takeProfitPoints)+
+      ";"+IntegerToString(record.breakEvenTriggerPoints)+
+      ";"+DoubleToString(record.initialStopLossPrice, record.symbolDigits)+
+      ";"+DoubleToString(record.initialTakeProfitPrice, record.symbolDigits)+
+      ";"+DoubleToString(record.finalStopLossPrice, record.symbolDigits)+
+      ";"+DoubleToString(record.finalTakeProfitPrice, record.symbolDigits)+
+      ";"+(record.breakEvenActivated ? "1" : "0")+
+      ";"+(record.profitLockActivated ? "1" : "0");
+
+    line +=
+      ";"+DoubleToString(record.resultPoints, 2)+
+      ";"+DoubleToString(record.resultMoney, m_accountCurrencyDigits)+
+      ";"+DoubleToString(record.resultRPoints, 4)+
+      ";"+DoubleToString(record.resultRMoney, 4)+
+      ";"+DoubleToString(record.maxFavorablePoints, 2)+
+      ";"+DoubleToString(record.maxFavorableR, 4)+
+      ";"+DoubleToString(record.openingCapital, m_accountCurrencyDigits)+
+      ";"+DoubleToString(record.targetRiskMoney, m_accountCurrencyDigits)+
+      ";"+DoubleToString(record.estimatedLossAtStop, m_accountCurrencyDigits)+
+      ";"+(record.entryAtrValid ? "1" : "0")+
+      ";"+DoubleToString(record.entryAtrPoints, 4)+
+      ";"+DoubleToString(record.entryStopLossAtr, 4);
+
+    line +=
+      ";"+SanitizeCsvValue(
+        MaDynamicsRegimeToString(
+          maRegime))+
+      ";"+DoubleToString(record.entryMaDynamics.slopeEarlier, 4)+
+      ";"+DoubleToString(record.entryMaDynamics.slopePrevious, 4)+
+      ";"+DoubleToString(record.entryMaDynamics.slopeCurrent, 4)+
+      ";"+DoubleToString(record.entryMaDynamics.accelerationPrevious, 4)+
+      ";"+DoubleToString(record.entryMaDynamics.accelerationCurrent, 4)+
+      ";"+(record.entryLocalDynamics.isValid ? "1" : "0")+
+      ";"+SanitizeCsvValue(
+        LocalDynamicsQuadrantToString(
+          localQuadrant))+
+      ";"+DoubleToString(
+        record.entryLocalDynamics.directionalChangePoints,
+        4)+
+      ";"+DoubleToString(
+        record.entryLocalDynamics.rangePoints,
+        4)+
+      ";"+DoubleToString(
+        record.entryLocalDynamics.directionalSlopePointsPerHour,
+        4)+
+      ";"+DoubleToString(
+        record.entryLocalDynamics.directionalCurvaturePointsPerHour2,
+        4)+
+      ";"+DoubleToString(
+        record.entryLocalDynamics.quadraticRSquared,
+        6)+
+      ";"+DoubleToString(localTrendStrength, 6)+
+      ";"+DoubleToString(localDirectionalEfficiency, 6);
+
+    line +=
+      ";"+(record.trendContextValid ? "1" : "0")+
+      ";"+DoubleToString(record.trendClose1, record.symbolDigits)+
+      ";"+DoubleToString(record.trendMa1, record.symbolDigits)+
+      ";"+DoubleToString(record.trendMa2, record.symbolDigits)+
+      ";"+(record.trendAligned ? "1" : "0")+
+      ";"+DoubleToString(record.pointSize, 10)+
+      ";"+IntegerToString(record.symbolDigits)+
+      ";"+DoubleToString(record.tickSize, 10)+
+      ";"+DoubleToString(record.tickValue, 8)+
+      ";"+DoubleToString(record.contractSize, 2)+
+      ";"+SanitizeCsvValue(m_accountCurrency);
+
+    return line;
   }
 
 
